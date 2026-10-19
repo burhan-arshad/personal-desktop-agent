@@ -123,7 +123,3 @@ def capture_grid(save_image=True):
 
 
 
-if __name__ == "__main__":
-    result=capture_grid()
-    result.show()
-    print("Perception Test Completed")
