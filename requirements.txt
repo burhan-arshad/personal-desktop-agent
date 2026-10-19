@@ -1,0 +1,31 @@
+# ---- Phase 0: Screen capture & control ----
+mss
+pillow
+pyautogui
+pygetwindow
+ 
+# ---- Phase 1: Vision LLM (Brain) ----
+langchain-groq
+python-dotenv
+ 
+# ---- Phase 2: Agent loop ----
+langgraph
+ 
+# ---- Phase 4: Memory ----
+# (sqlite3 Python ke built-in standard library mein hai, install nahi karna)
+ 
+# ---- Phase 5: Hybrid Skills ----
+pywhatkit
+ 
+# ---- Phase 6: Self-Correction ----
+imagehash
+ 
+# ---- Phase 7: Voice I/O ----
+openai-whisper
+sounddevice
+scipy
+edge-tts
+playsound
+ 
+# ---- Phase 8: Scheduling ----
+schedule
