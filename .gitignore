@@ -32,6 +32,11 @@ logs/
 screenshots/
 *.tmp.png
 *.tmp.jpg
+.env
+venv/
+__pycache__/
+*.py[cod]
+phase0_sanity/*.png
 
 .vscode/
 .idea/
