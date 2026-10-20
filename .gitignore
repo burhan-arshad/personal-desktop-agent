@@ -53,3 +53,5 @@ dist/
 
 .ipynb_checkpoints/
 pip-wheel-metadata/
+
+test_brain.py
