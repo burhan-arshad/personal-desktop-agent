@@ -8,8 +8,8 @@ import pyautogui
 from PIL import Image, ImageDraw, ImageFont
 
 MAX_IMAGE_WIDTH=1024
-GRID_COLS=8
-GRID_ROWS=8
+GRID_COLS=16
+GRID_ROWS=16
 
 PROJECT_ROOT=Path(__file__).resolve().parent.parent
 OUTPUT_DIR=PROJECT_ROOT/"phase0_sanity"
@@ -36,16 +36,17 @@ def taking_screenshot():
     return image
 
 def resize_screenshot(image):
-    original_width, original_height= image.size
-    if original_width<=MAX_IMAGE_WIDTH:
+    original_width, original_height = image.size
+
+    if original_width <= MAX_IMAGE_WIDTH:
         return image.copy()
-    
-    scale=original_width/MAX_IMAGE_WIDTH
-    new_width=MAX_IMAGE_WIDTH
-    new_height=round(original_height*scale)
+
+    scale = MAX_IMAGE_WIDTH / original_width
+    new_width = MAX_IMAGE_WIDTH
+    new_height = round(original_height * scale)
 
     return image.resize(
-        (new_width,new_height),
+        (new_width, new_height),
         Image.Resampling.LANCZOS
     )
 

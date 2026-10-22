@@ -11,8 +11,8 @@ pyautogui.PAUSE = 0.3
 
 VALID_CELLS = {
     f"{column}{row}"
-    for column in string.ascii_uppercase[:8]
-    for row in range(1, 9)
+    for column in string.ascii_uppercase[:16]
+    for row in range(1, 17)
 }
 
 ALLOWED_KEYS = {
@@ -37,9 +37,9 @@ def cell_to_screen_coordinates(grid_cell, grid_image):
     column_index = string.ascii_uppercase.index(grid_cell[0])
     row_index = int(grid_cell[1:]) - 1
 
-    cell_width = image_width / 8
-    cell_height = image_height / 8
-    
+    cell_width = image_width / 16
+    cell_height = image_height / 16
+
     image_x = (column_index + 0.5) * cell_width
     image_y = (row_index + 0.5) * cell_height
     
@@ -79,7 +79,7 @@ def execute_action(action_data, grid_image, confirm=False):
         print(f"Click target: {cell} -> screen coordinates ({x}, {y})")
         pyautogui.click(x,y)
     elif action=="type":
-        text=action_data("text")
+        text=action_data.get("text")
         if not isinstance(text, str) or not text:
             raise ValueError("Type action requires non-empty text")
         pyautogui.write(text)
