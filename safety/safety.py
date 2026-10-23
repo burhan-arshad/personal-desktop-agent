@@ -30,57 +30,64 @@ BLOCKED_PATTERNS = [
     "disable security",
 ]
 
-def _action_text(action:dict)->str:
-    parts = [
-        str(action.get("action", "")),
-        str(action.get("reason", "")),
-        str(action.get("reasoning", "")),
-        str(action.get("text", "")),
-        str(action.get("target", "")),
-    ]
+def action_text(action: dict) -> str:
+    fields = (
+        "action",
+        "target",
+        "text",
+        "reason",
+        "reasoning",
+    )
 
-    return " ".join(parts).lower()
+    return " ".join(
+        str(action.get(field, ""))
+        for field in fields
+    ).lower()
 
 def classify_risk(action: dict)->str:
     if not isinstance(action, dict):
         return "blocked"
 
-    text=_action_text(action)
+    text=action_text(action)
     if any(pattern in text for pattern in BLOCKED_PATTERNS):
         return "blocked"
 
-    if str(action.get("risky_level","").lower())=="risky":
+    model_risk = str(action.get("risky_level","")).lower()
+    if model_risk=="risky":
+        return "risky"
+
+    if model_risk!="safe":
         return "risky"
 
     words=set(text.replace('/',' ').replace('-',' ').split())
     if words.intersaction(RISKY_KEYWORDS):
         return "risky"
 
-    if action.get("action") not in {
+    allowed_actions = {
         "click",
         "type",
         "press",
         "scroll",
         "wait",
         "done",
-    }:
+    }
+
+    if action.get("action") not in allowed_actions:
         return "blocked"
 
     return "safe"
 
 def confirm_with_human(action: dict) -> bool:
-    print("\n[CONFIRMATION REQUIRED]")
+    print("\n[HUMAN REVIEW REQUIRED]")
     print(f"Action: {action.get('action', 'unknown')}")
-    print(f"Target: {action.get('target', 'not specified')}")
-    print(f"Text: {action.get('text', 'not specified')}")
-    print(
-        f"Reason: "
-        f"{action.get('reason', action.get('reasoning', 'Not provided'))}"
-    )
+    print(f"Target: {action.get('target', 'unspecified')}")
+    print(f"Text: {action.get('text', 'unspecified')}")
+    print(f"Reason: {action.get('reason', 'unspecified')}")
 
     response = input("Approve this action? (yes/no): ").strip().lower()
 
     return response in {"yes", "y"}
+
 
 def log_decision(
     action: dict,
@@ -95,4 +102,6 @@ def log_decision(
     }
 
     with AUDIT_LOG.open("a", encoding="utf-8") as file:
-        file.write(json.dumps(record, ensure_ascii=False) + "\n")
+        file.write(
+            json.dumps(record, ensure_ascii=False) + "\n"
+        )
