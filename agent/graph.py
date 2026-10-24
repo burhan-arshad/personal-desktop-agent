@@ -1,4 +1,3 @@
-
 from typing import TypedDict
 from uuid import uuid4
 from io import BytesIO
@@ -10,6 +9,7 @@ from langgraph.types import interrupt, Command
 
 import sys
 from pathlib import Path
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 if str(PROJECT_ROOT) not in sys.path:
@@ -81,20 +81,83 @@ def capture_node(state: AgentState) -> dict:
 def think_node(state: AgentState) -> dict:
     print("\n[THINK] Asking the Brain for the next action...")
 
-    history_summary = summarize_recent(state["history"])
-
     current_image = Image.open(
-    BytesIO(state["current_image"])
+        BytesIO(state["current_image"])
     ).convert("RGB")
 
+    history_summary = summarize_recent(state["history"])
 
     action = decide_action(
-    state["instruction"],
-    current_image,
-    summarize_recent(state["history"]),
+        state["instruction"],
+        current_image,
+        history_summary,
     )
 
     print(f"Proposed action: {action}")
+
+    # Stop immediately if the Brain cannot identify a clear next action.
+    if action.get("action") == "wait":
+        reason = action.get(
+            "reason",
+            "The next action or target is unclear.",
+        )
+
+        print("[STOP] Brain cannot identify a clear next action.")
+        print(f"[REASON] {reason}")
+
+        history_entry = {
+            **action,
+            "result": "stopped_unclear_target",
+        }
+
+        return {
+            "last_action": {
+                **action,
+                "action": "done",
+                "grid_cell": None,
+            },
+            "history": state["history"] + [history_entry],
+            "is_done": True,
+            "human_approved": False,
+        }
+
+    # Detect an action that repeats the previous two actions.
+    if len(state["history"]) >= 2:
+        previous_actions = state["history"][-2:]
+
+        repeated = all(
+            item.get("action") == action.get("action")
+            and item.get("target") == action.get("target")
+            and item.get("grid_cell") == action.get("grid_cell")
+            and item.get("scroll_direction")
+            == action.get("scroll_direction")
+            for item in previous_actions
+        )
+
+        if repeated:
+            print(
+                "[STOP] Repeated action detected. "
+                "Stopping to prevent unnecessary actions."
+            )
+
+            return {
+                "last_action": {
+                    "action": "done",
+                    "grid_cell": None,
+                    "text": "",
+                    "key": "",
+                    "scroll_direction": "",
+                    "target": "",
+                    "risk_level": "safe",
+                    "reason": "Repeated action detected.",
+                },
+                "is_done": True,
+                "human_approved": False,
+                "history": state["history"] + [{
+                    **action,
+                    "result": "stopped_repeated_action",
+                }],
+            }
 
     history_entry = {
         **action,
@@ -104,14 +167,14 @@ def think_node(state: AgentState) -> dict:
     return {
         "last_action": action,
         "history": state["history"] + [history_entry],
-        "is_done": action["action"] == "done",
+        "is_done": action.get("action") == "done",
         "human_approved": False,
     }
 
 
 def should_continue(state: AgentState):
     if state["is_done"]:
-        print("\n[ROUTER] Brain reported task complete.")
+        print("\n[ROUTER] Task stopped or marked complete.")
         return END
 
     if state["step_count"] >= MAX_STEPS:
@@ -134,6 +197,7 @@ def safety_check_node(state: AgentState) -> dict:
 
         return {
             "risk_level": risk,
+            "human_approved": False,
             "history": update_latest_history(
                 state,
                 "blocked; not executed",
@@ -165,10 +229,7 @@ def safety_check_node(state: AgentState) -> dict:
 
 def route_after_safety(state: AgentState):
     if state["risk_level"] == "blocked":
-        if state["step_count"] >= MAX_STEPS:
-            return END
-
-        return "capture"
+        return END
 
     if state["risk_level"] == "risky":
         return "human_review"
@@ -209,17 +270,12 @@ def human_review_node(state: AgentState) -> dict:
 
     print("\n[HUMAN REVIEW] Action denied. Skipping execution.")
 
-    history = update_latest_history(
-        state,
-        (
-            "user denied this action; do not repeat it; "
-            "try a different approach"
-        ),
-    )
-
     return {
         "human_approved": False,
-        "history": history,
+        "history": update_latest_history(
+            state,
+            "user denied this action; not executed",
+        ),
         "step_count": state["step_count"] + 1,
     }
 
@@ -236,12 +292,31 @@ def route_after_human(state: AgentState):
 
 def act_node(state: AgentState) -> dict:
     action = state["last_action"]
+    risk = state["risk_level"]
+
+    # Final safety checks before any desktop interaction.
+    if risk == "blocked":
+        raise RuntimeError("Blocked action cannot be executed.")
+
+    if risk not in {"safe", "risky"}:
+        raise RuntimeError(f"Invalid risk level: {risk}")
+
+    if not state["human_approved"]:
+        raise RuntimeError(
+            "Action cannot execute without approval."
+        )
+
+    if risk == "risky" and not state["human_approved"]:
+        raise RuntimeError(
+            "Risky action requires explicit approval."
+        )
 
     print("\n[ACT] Executing the approved or safe action.")
     print(f"Action: {action['action']}")
     print(f"Target: {action.get('target', '')}")
+
     current_image = Image.open(
-    BytesIO(state["current_image"])
+        BytesIO(state["current_image"])
     ).convert("RGB")
 
     execute_action(
@@ -250,13 +325,11 @@ def act_node(state: AgentState) -> dict:
         confirm=True,
     )
 
-    history = update_latest_history(
-        state,
-        "executed; awaiting visual verification",
-    )
-
     return {
-        "history": history,
+        "history": update_latest_history(
+            state,
+            "executed; awaiting visual verification",
+        ),
         "step_count": state["step_count"] + 1,
     }
 
@@ -295,7 +368,6 @@ graph.add_conditional_edges(
     {
         "act": "act",
         "human_review": "human_review",
-        "capture": "capture",
         END: END,
     },
 )
@@ -326,7 +398,7 @@ app = graph.compile(checkpointer=checkpointer)
 def run_agent(instruction: str):
     initial_state: AgentState = {
         "instruction": instruction,
-        "current_image": None,
+        "current_image": b"",
         "last_action": {},
         "history": [],
         "step_count": 0,
@@ -358,14 +430,15 @@ def run_agent(instruction: str):
                     interrupted = True
 
                     interrupt_info = changes[0].value
+                    risky_action = interrupt_info["action"]
 
                     print("\n" + "=" * 45)
                     print("[HUMAN REVIEW REQUIRED]")
                     print(f"Risk: {interrupt_info['risk_level']}")
-                    print(f"Action: {interrupt_info['action']}")
-                    print(f"Target: {interrupt_info['action'].get('target', '')}")
-                    print(f"Text: {interrupt_info['action'].get('text', '')}")
-                    print(f"Reason: {interrupt_info['action'].get('reason', '')}")
+                    print(f"Action: {risky_action}")
+                    print(f"Target: {risky_action.get('target', '')}")
+                    print(f"Text: {risky_action.get('text', '')}")
+                    print(f"Reason: {risky_action.get('reason', '')}")
                     print("=" * 45)
 
                     response = input(
