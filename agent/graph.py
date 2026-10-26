@@ -1,14 +1,13 @@
 from typing import TypedDict
 from uuid import uuid4
 from io import BytesIO
-from PIL import Image
+from pathlib import Path
+import sys
 
+from PIL import Image
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import interrupt, Command
-
-import sys
-from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -19,9 +18,16 @@ from perception.perception import capture_grid
 from brain.brain import decide_action
 from actuator.actuator import execute_action
 from safety.safety import classify_risk, log_decision
-
+from memory.memory import (
+    init_db,
+    start_session,
+    end_session,
+    log_step,
+    log_confirmation,
+)
 
 MAX_STEPS = 8
+SCREENSHOT_DIR = PROJECT_ROOT / "memory" / "screenshots"
 
 
 class AgentState(TypedDict):
@@ -33,6 +39,8 @@ class AgentState(TypedDict):
     is_done: bool
     risk_level: str
     human_approved: bool
+    session_id: int
+    current_step_id: int
 
 
 def summarize_recent(history):
@@ -74,7 +82,7 @@ def capture_node(state: AgentState) -> dict:
     grid_image.save(image_buffer, format="PNG")
 
     return {
-        "current_image": image_buffer.getvalue()
+        "current_image": image_buffer.getvalue(),
     }
 
 
@@ -95,7 +103,6 @@ def think_node(state: AgentState) -> dict:
 
     print(f"Proposed action: {action}")
 
-    # Stop immediately if the Brain cannot identify a clear next action.
     if action.get("action") == "wait":
         reason = action.get(
             "reason",
@@ -121,7 +128,6 @@ def think_node(state: AgentState) -> dict:
             "human_approved": False,
         }
 
-    # Detect an action that repeats the previous two actions.
     if len(state["history"]) >= 2:
         previous_actions = state["history"][-2:]
 
@@ -153,10 +159,12 @@ def think_node(state: AgentState) -> dict:
                 },
                 "is_done": True,
                 "human_approved": False,
-                "history": state["history"] + [{
-                    **action,
-                    "result": "stopped_repeated_action",
-                }],
+                "history": state["history"] + [
+                    {
+                        **action,
+                        "result": "stopped_repeated_action",
+                    }
+                ],
             }
 
     history_entry = {
@@ -190,6 +198,28 @@ def safety_check_node(state: AgentState) -> dict:
 
     print(f"\n[SAFETY] Risk classification: {risk.upper()}")
 
+    if risk not in {"safe", "risky", "blocked"}:
+        raise ValueError(f"Invalid risk classification: {risk}")
+
+    # Record each safety-classified action once.
+    conn = init_db()
+
+    try:
+        step_id = log_step(
+            conn=conn,
+            session_id=state["session_id"],
+            step_number=state["step_count"] + 1,
+            action=action,
+            risk_level=risk,
+            screenshot_bytes=(
+                state["current_image"]
+                if risk in {"risky", "blocked"}
+                else None
+            ),
+        )
+    finally:
+        conn.close()
+
     if risk == "blocked":
         print("[SAFETY] Blocked action will NOT be executed.")
 
@@ -197,6 +227,7 @@ def safety_check_node(state: AgentState) -> dict:
 
         return {
             "risk_level": risk,
+            "current_step_id": step_id,
             "human_approved": False,
             "history": update_latest_history(
                 state,
@@ -212,6 +243,7 @@ def safety_check_node(state: AgentState) -> dict:
 
         return {
             "risk_level": risk,
+            "current_step_id": step_id,
             "human_approved": True,
             "history": update_latest_history(
                 state,
@@ -223,6 +255,7 @@ def safety_check_node(state: AgentState) -> dict:
 
     return {
         "risk_level": risk,
+        "current_step_id": step_id,
         "human_approved": False,
     }
 
@@ -240,14 +273,19 @@ def route_after_safety(state: AgentState):
 def human_review_node(state: AgentState) -> dict:
     action = state["last_action"]
 
-    decision = interrupt({
-        "message": "A risky action requires your approval.",
-        "action": action,
-        "risk_level": state["risk_level"],
-        "instruction": state["instruction"],
-    })
+    decision = interrupt(
+        {
+            "message": "A risky action requires your approval.",
+            "action": action,
+            "risk_level": state["risk_level"],
+            "instruction": state["instruction"],
+        }
+    )
 
-    approved = str(decision).strip().lower() in {"yes", "y"}
+    approved = (
+        str(decision).strip().lower()
+        in {"yes", "y"}
+    )
 
     response = "approved" if approved else "denied"
 
@@ -256,6 +294,18 @@ def human_review_node(state: AgentState) -> dict:
         state["risk_level"],
         response,
     )
+
+    # Persist the human decision in SQLite.
+    conn = init_db()
+
+    try:
+        log_confirmation(
+            conn,
+            state["current_step_id"],
+            "yes" if approved else "no",
+        )
+    finally:
+        conn.close()
 
     if approved:
         print("\n[HUMAN REVIEW] Action approved.")
@@ -290,11 +340,63 @@ def route_after_human(state: AgentState):
     return "capture"
 
 
+def record_action_failure(state: AgentState, error: Exception):
+    """Update the existing step if execution fails."""
+    screenshot_path = None
+    error_details = f"\nExecution failed: {error}"
+
+    if state["current_image"]:
+        try:
+            SCREENSHOT_DIR.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            screenshot_file = (
+                f"session_{state['session_id']}"
+                f"_step_{state['current_step_id']}_failed.png"
+            )
+
+            destination = SCREENSHOT_DIR / screenshot_file
+            destination.write_bytes(state["current_image"])
+
+            screenshot_path = str(
+                destination.relative_to(PROJECT_ROOT)
+            )
+
+        except OSError as screenshot_error:
+            error_details += (
+                f"\nFailure screenshot could not be saved: "
+                f"{screenshot_error}"
+            )
+
+    conn = init_db()
+
+    try:
+        conn.execute(
+            """
+            UPDATE steps
+            SET reasoning = COALESCE(reasoning, '') || ?,
+                screenshot_path = COALESCE(?, screenshot_path)
+            WHERE step_id = ?
+            """,
+            (
+                error_details,
+                screenshot_path,
+                state["current_step_id"],
+            ),
+        )
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
+
 def act_node(state: AgentState) -> dict:
     action = state["last_action"]
     risk = state["risk_level"]
 
-    # Final safety checks before any desktop interaction.
     if risk == "blocked":
         raise RuntimeError("Blocked action cannot be executed.")
 
@@ -319,11 +421,16 @@ def act_node(state: AgentState) -> dict:
         BytesIO(state["current_image"])
     ).convert("RGB")
 
-    execute_action(
-        action,
-        current_image,
-        confirm=True,
-    )
+    try:
+        execute_action(
+            action,
+            current_image,
+            confirm=True,
+        )
+
+    except Exception as error:
+        record_action_failure(state, error)
+        raise
 
     return {
         "history": update_latest_history(
@@ -396,67 +503,117 @@ app = graph.compile(checkpointer=checkpointer)
 
 
 def run_agent(instruction: str):
-    initial_state: AgentState = {
-        "instruction": instruction,
-        "current_image": b"",
-        "last_action": {},
-        "history": [],
-        "step_count": 0,
-        "is_done": False,
-        "risk_level": "",
-        "human_approved": False,
-    }
+    conn = init_db()
+    session_id = None
+    final_status = "error"
 
-    config = {
-        "configurable": {
-            "thread_id": str(uuid4()),
+    try:
+        session_id = start_session(conn, instruction)
+
+        initial_state: AgentState = {
+            "instruction": instruction,
+            "current_image": b"",
+            "last_action": {},
+            "history": [],
+            "step_count": 0,
+            "is_done": False,
+            "risk_level": "",
+            "human_approved": False,
+            "session_id": session_id,
+            "current_step_id": 0,
         }
-    }
 
-    print("\nStarting Desktop AI Agent...")
+        config = {
+            "configurable": {
+                "thread_id": str(uuid4()),
+            }
+        }
 
-    payload = initial_state
+        print(f"\nStarting Desktop AI Agent...")
+        print(f"Session ID: {session_id}")
 
-    while True:
-        interrupted = False
+        payload = initial_state
 
-        for update in app.stream(
-            payload,
-            config=config,
-            stream_mode="updates",
-        ):
-            for node_name, changes in update.items():
-                if node_name == "__interrupt__":
-                    interrupted = True
+        while True:
+            interrupted = False
 
-                    interrupt_info = changes[0].value
-                    risky_action = interrupt_info["action"]
+            for update in app.stream(
+                payload,
+                config=config,
+                stream_mode="updates",
+            ):
+                for node_name, changes in update.items():
 
-                    print("\n" + "=" * 45)
-                    print("[HUMAN REVIEW REQUIRED]")
-                    print(f"Risk: {interrupt_info['risk_level']}")
-                    print(f"Action: {risky_action}")
-                    print(f"Target: {risky_action.get('target', '')}")
-                    print(f"Text: {risky_action.get('text', '')}")
-                    print(f"Reason: {risky_action.get('reason', '')}")
-                    print("=" * 45)
+                    if node_name == "__interrupt__":
+                        interrupted = True
 
-                    response = input(
-                        "Approve this exact action? (yes/no): "
-                    ).strip().lower()
+                        interrupt_info = changes[0].value
+                        risky_action = interrupt_info["action"]
 
-                    payload = Command(resume=response)
+                        print("\n" + "=" * 45)
+                        print("[HUMAN REVIEW REQUIRED]")
+                        print(
+                            f"Risk: {interrupt_info['risk_level']}"
+                        )
+                        print(f"Action: {risky_action}")
+                        print(
+                            f"Target: "
+                            f"{risky_action.get('target', '')}"
+                        )
+                        print(
+                            f"Text: "
+                            f"{risky_action.get('text', '')}"
+                        )
+                        print(
+                            f"Reason: "
+                            f"{risky_action.get('reason', '')}"
+                        )
+                        print("=" * 45)
 
-                else:
-                    print(
-                        f"\n[GRAPH] Node: {node_name} | "
-                        f"Updated fields: {list(changes.keys())}"
-                    )
+                        response = input(
+                            "Approve this exact action? (yes/no): "
+                        ).strip().lower()
 
-        if not interrupted:
-            break
+                        payload = Command(resume=response)
 
-    print("\nAgent run finished.")
+                    else:
+                        print(
+                            f"\n[GRAPH] Node: {node_name} | "
+                            f"Updated fields: {list(changes.keys())}"
+                        )
+
+            if not interrupted:
+                break
+
+        final_state = app.get_state(config).values
+
+        if final_state.get("step_count", 0) >= MAX_STEPS:
+            final_status = "max_steps_reached"
+        else:
+            final_status = "completed"
+
+        print("\nAgent run finished.")
+        print(f"Session status: {final_status}")
+
+    except Exception:
+        final_status = "error"
+        print("\n[ERROR] Agent run failed.")
+        raise
+
+    finally:
+        try:
+            if session_id is not None:
+                end_session(
+                    conn,
+                    session_id,
+                    final_status,
+                )
+                print(
+                    f"[MEMORY] Session {session_id} "
+                    f"saved as '{final_status}'."
+                )
+        finally:
+            conn.close()
 
 
 if __name__ == "__main__":
