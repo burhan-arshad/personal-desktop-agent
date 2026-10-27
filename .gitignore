@@ -56,3 +56,6 @@ pip-wheel-metadata/
 
 test_brain.py
 test_phase4_graph.py
+safety_audit.jsonl
+test_skills.py
+memory/screenshots/
