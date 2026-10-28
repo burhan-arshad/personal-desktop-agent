@@ -6,6 +6,8 @@ from pathlib import Path
 from urllib.parse import quote_plus
 
 from perception.perception import capture_grid
+from brain.brain import classify_skill
+
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -268,3 +270,88 @@ SKILL_REGISTRY = {
         "execute": take_screenshot,
     },
 }
+
+def match_skill(instruction):
+    """
+    Match common user instructions to a skill using keywords.
+    Returns a skill name or None.
+    """
+
+    if not isinstance(instruction, str) or not instruction.strip():
+        return None
+
+    text = instruction.lower().strip()
+
+    patterns = {
+        "send_whatsapp_message": [
+            "send whatsapp message",
+            "send a whatsapp message",
+            "whatsapp message to",
+            "message on whatsapp",
+        ],
+        "open_file_explorer": [
+            "open file explorer",
+            "open folder",
+            "file explorer kholo",
+            "folder kholo",
+        ],
+        "take_screenshot": [
+            "take a screenshot",
+            "take screenshot",
+            "capture screenshot",
+            "screenshot of my desktop",
+        ],
+        "search_web": [
+            "search the web for",
+            "search google for",
+            "google search for",
+            "search for",
+        ],
+        "open_app": [
+            "open app",
+            "open the app",
+            "launch app",
+            "launch the app",
+            "open notepad",
+            "open calculator",
+            "open paint",
+            "open powershell",
+            "open command prompt",
+        ],
+    }
+
+    matches = [
+        skill_name
+        for skill_name, phrases in patterns.items()
+        if any(phrase in text for phrase in phrases)
+    ]
+
+    if len(matches) != 1:
+        return None
+
+    return matches[0]
+
+
+def resolve_skill(instruction):
+    """
+    Try keyword matching first.
+    If no keyword match exists, use the text-only LLM classifier.
+    Returns a skill name or None.
+    """
+
+    skill_name = match_skill(instruction)
+
+    if skill_name:
+        print(f"[SKILL MATCHER] Matched: {skill_name}")
+        return skill_name
+
+    print("[SKILL MATCHER] No keyword match. Trying LLM...")
+
+    skill_name = classify_skill(instruction)
+
+    if skill_name:
+        print(f"[SKILL RESOLVER] Selected: {skill_name}")
+        return skill_name
+
+    print("[SKILL RESOLVER] No suitable skill found.")
+    return None

@@ -1,3 +1,4 @@
+
 from typing import TypedDict
 from uuid import uuid4
 from io import BytesIO
@@ -9,10 +10,12 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import interrupt, Command
 
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
 
 from perception.perception import capture_grid
 from brain.brain import decide_action
@@ -25,6 +28,8 @@ from memory.memory import (
     log_step,
     log_confirmation,
 )
+from skills.skills import SKILL_REGISTRY
+from brain.brain import classify_skill
 
 MAX_STEPS = 8
 SCREENSHOT_DIR = PROJECT_ROOT / "memory" / "screenshots"
@@ -41,6 +46,10 @@ class AgentState(TypedDict):
     human_approved: bool
     session_id: int
     current_step_id: int
+    skill_name: str
+    skill_payload: dict
+    execution_mode: str
+    skill_error: str
 
 
 def summarize_recent(history):
@@ -71,6 +80,117 @@ def update_latest_history(state, result):
         }
 
     return history
+
+
+def skill_match_node(state: AgentState) -> dict:
+    print("\n[SKILL MATCH] Resolving user instruction...")
+
+    skill_name = classify_skill(state["instruction"])
+    if not skill_name:
+        print(
+            "[SKILL MATCH] No skill matched. "
+            "Using vision loop."
+        )
+
+        return {
+            "skill_name": "",
+            "skill_payload": {},
+            "execution_mode": "vision",
+            "skill_error": "",
+        }
+
+    skill = SKILL_REGISTRY.get(skill_name)
+
+    if skill is None:
+        print("[SKILL MATCH] Unknown skill. Falling back to vision.")
+
+        return {
+            "skill_name": "",
+            "skill_payload": {},
+            "execution_mode": "vision",
+            "skill_error": "",
+        }
+
+    try:
+        payload = skill["prepare"](state["instruction"])
+
+        if not isinstance(payload, dict):
+            raise TypeError(
+                "Skill preparation must return a dictionary."
+            )
+
+    except Exception as error:
+        message = str(error)
+
+        print(f"[SKILL PREPARATION ERROR] {message}")
+
+        return {
+            "skill_name": skill_name,
+            "skill_payload": {},
+            "execution_mode": "skill",
+            "skill_error": message,
+            "is_done": True,
+            "human_approved": False,
+            "last_action": {
+                "action": "done",
+                "grid_cell": None,
+                "text": "",
+                "key": "",
+                "scroll_direction": "",
+                "target": skill_name,
+                "risk_level": "safe",
+                "reason": f"Skill preparation failed: {message}",
+            },
+        }
+
+    action = {
+        "action": skill_name,
+        "skill_name": skill_name,
+        "target": skill["description"],
+        "text": payload.get(
+            "message",
+            payload.get("query", ""),
+        ),
+        "reason": "Prepared skill for the user's instruction.",
+        "risk_level": skill["risk_level"],
+        "payload": payload,
+        "instruction": state["instruction"],
+    }
+
+    print(f"[SKILL MATCH] Selected: {skill_name}")
+
+    if skill_name == "send_whatsapp_message":
+        print("[SKILL MATCH] WhatsApp message prepared.")
+        print(f"Recipient: {payload.get('phone', '')}")
+        print(f"Message: {payload.get('message', '')}")
+    else:
+        print(f"[SKILL MATCH] Prepared payload: {payload}")
+
+    return {
+        "skill_name": skill_name,
+        "skill_payload": payload,
+        "execution_mode": "skill",
+        "skill_error": "",
+        "last_action": action,
+        "history": state["history"] + [
+            {
+                **action,
+                "result": "proposed",
+            }
+        ],
+        "is_done": False,
+        "human_approved": False,
+    }
+
+
+def route_after_skill_match(state: AgentState):
+    if state["skill_error"] or state["is_done"]:
+        return END
+
+    if state["skill_name"]:
+        return "safety_check"
+
+    return "capture"
 
 
 def capture_node(state: AgentState) -> dict:
@@ -199,9 +319,10 @@ def safety_check_node(state: AgentState) -> dict:
     print(f"\n[SAFETY] Risk classification: {risk.upper()}")
 
     if risk not in {"safe", "risky", "blocked"}:
-        raise ValueError(f"Invalid risk classification: {risk}")
+        raise ValueError(
+            f"Invalid risk classification: {risk}"
+        )
 
-    # Record each safety-classified action once.
     conn = init_db()
 
     try:
@@ -213,7 +334,10 @@ def safety_check_node(state: AgentState) -> dict:
             risk_level=risk,
             screenshot_bytes=(
                 state["current_image"]
-                if risk in {"risky", "blocked"}
+                if (
+                    risk in {"risky", "blocked"}
+                    and state["current_image"]
+                )
                 else None
             ),
         )
@@ -295,7 +419,6 @@ def human_review_node(state: AgentState) -> dict:
         response,
     )
 
-    # Persist the human decision in SQLite.
     conn = init_db()
 
     try:
@@ -334,14 +457,21 @@ def route_after_human(state: AgentState):
     if state["human_approved"]:
         return "act"
 
+    if state["execution_mode"] == "skill":
+        return END
+
     if state["step_count"] >= MAX_STEPS:
         return END
 
     return "capture"
 
 
-def record_action_failure(state: AgentState, error: Exception):
-    """Update the existing step if execution fails."""
+def record_action_failure(
+    state: AgentState,
+    error: Exception,
+):
+    """Update the existing database step if execution fails."""
+
     screenshot_path = None
     error_details = f"\nExecution failed: {error}"
 
@@ -366,7 +496,7 @@ def record_action_failure(state: AgentState, error: Exception):
 
         except OSError as screenshot_error:
             error_details += (
-                f"\nFailure screenshot could not be saved: "
+                "\nFailure screenshot could not be saved: "
                 f"{screenshot_error}"
             )
 
@@ -398,10 +528,14 @@ def act_node(state: AgentState) -> dict:
     risk = state["risk_level"]
 
     if risk == "blocked":
-        raise RuntimeError("Blocked action cannot be executed.")
+        raise RuntimeError(
+            "Blocked action cannot be executed."
+        )
 
     if risk not in {"safe", "risky"}:
-        raise RuntimeError(f"Invalid risk level: {risk}")
+        raise RuntimeError(
+            f"Invalid risk level: {risk}"
+        )
 
     if not state["human_approved"]:
         raise RuntimeError(
@@ -417,11 +551,40 @@ def act_node(state: AgentState) -> dict:
     print(f"Action: {action['action']}")
     print(f"Target: {action.get('target', '')}")
 
-    current_image = Image.open(
-        BytesIO(state["current_image"])
-    ).convert("RGB")
-
     try:
+        if state["execution_mode"] == "skill":
+            skill_name = state["skill_name"]
+            skill = SKILL_REGISTRY.get(skill_name)
+
+            if skill is None:
+                raise RuntimeError(
+                    f"Skill is not registered: {skill_name}"
+                )
+
+            result = skill["execute"](
+                state["skill_payload"]
+            )
+
+            print(f"[SKILL RESULT] {result}")
+
+            return {
+                "history": update_latest_history(
+                    state,
+                    f"skill execution returned: {result}",
+                ),
+                "step_count": state["step_count"] + 1,
+                "is_done": True,
+            }
+
+        if not state["current_image"]:
+            raise RuntimeError(
+                "Vision action requires a screenshot."
+            )
+
+        current_image = Image.open(
+            BytesIO(state["current_image"])
+        ).convert("RGB")
+
         execute_action(
             action,
             current_image,
@@ -442,6 +605,9 @@ def act_node(state: AgentState) -> dict:
 
 
 def after_act(state: AgentState):
+    if state["is_done"]:
+        return END
+
     if state["step_count"] >= MAX_STEPS:
         print("\n[ROUTER] Maximum attempt limit reached.")
         return END
@@ -451,13 +617,25 @@ def after_act(state: AgentState):
 
 graph = StateGraph(AgentState)
 
+graph.add_node("skill_match", skill_match_node)
 graph.add_node("capture", capture_node)
 graph.add_node("think", think_node)
 graph.add_node("safety_check", safety_check_node)
 graph.add_node("human_review", human_review_node)
 graph.add_node("act", act_node)
 
-graph.add_edge(START, "capture")
+graph.add_edge(START, "skill_match")
+
+graph.add_conditional_edges(
+    "skill_match",
+    route_after_skill_match,
+    {
+        "safety_check": "safety_check",
+        "capture": "capture",
+        END: END,
+    },
+)
+
 graph.add_edge("capture", "think")
 
 graph.add_conditional_edges(
@@ -521,6 +699,10 @@ def run_agent(instruction: str):
             "human_approved": False,
             "session_id": session_id,
             "current_step_id": 0,
+            "skill_name": "",
+            "skill_payload": {},
+            "execution_mode": "vision",
+            "skill_error": "",
         }
 
         config = {
@@ -529,7 +711,7 @@ def run_agent(instruction: str):
             }
         }
 
-        print(f"\nStarting Desktop AI Agent...")
+        print("\nStarting Desktop AI Agent...")
         print(f"Session ID: {session_id}")
 
         payload = initial_state
@@ -565,6 +747,10 @@ def run_agent(instruction: str):
                             f"{risky_action.get('text', '')}"
                         )
                         print(
+                            f"Payload: "
+                            f"{risky_action.get('payload', {})}"
+                        )
+                        print(
                             f"Reason: "
                             f"{risky_action.get('reason', '')}"
                         )
@@ -592,6 +778,11 @@ def run_agent(instruction: str):
         else:
             final_status = "completed"
 
+        if final_state.get("skill_error"):
+            final_status = "error"
+        elif final_state.get("risk_level") == "blocked":
+            final_status = "blocked"
+
         print("\nAgent run finished.")
         print(f"Session status: {final_status}")
 
@@ -608,6 +799,7 @@ def run_agent(instruction: str):
                     session_id,
                     final_status,
                 )
+
                 print(
                     f"[MEMORY] Session {session_id} "
                     f"saved as '{final_status}'."

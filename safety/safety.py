@@ -16,6 +16,13 @@ ALLOWED_ACTIONS = {
     "wait",
     "done",
 }
+ALLOWED_SKILL_ACTIONS = {
+    "open_app",
+    "search_web",
+    "send_whatsapp_message",
+    "open_file_explorer",
+    "take_screenshot",
+}
 
 
 RISKY_KEYWORDS = {
@@ -78,22 +85,37 @@ def normalize_text(value: str) -> str:
 
 
 def action_text(action: dict) -> str:
-    """Combine relevant action fields for safety analysis."""
+    """Combine action and skill payload fields for safety analysis."""
+
     fields = (
         "action",
         "target",
         "text",
         "reason",
         "reasoning",
+        "instruction",
+        "skill_name",
+        "phone",
+        "message",
+        "path",
+        "app_name",
+        "query",
     )
 
-    return normalize_text(
-        " ".join(
-            str(action.get(field, ""))
-            for field in fields
+    values = [
+        str(action.get(field, ""))
+        for field in fields
+    ]
+
+    payload = action.get("payload", {})
+
+    if isinstance(payload, dict):
+        values.extend(
+            str(value)
+            for value in payload.values()
         )
-    )
 
+    return normalize_text(" ".join(values))
 
 def classify_risk(action: dict) -> str:
     """Return safe, risky, or blocked for a proposed action."""
@@ -104,7 +126,7 @@ def classify_risk(action: dict) -> str:
     action_name = str(action.get("action", "")).strip().lower()
 
     # Reject unknown actions before considering execution.
-    if action_name not in ALLOWED_ACTIONS:
+    if action_name not in ALLOWED_ACTIONS | ALLOWED_SKILL_ACTIONS:
         return "blocked"
 
     text = action_text(action)
@@ -129,6 +151,9 @@ def classify_risk(action: dict) -> str:
 
     # Require approval for known sensitive actions.
     words = set(text.split())
+
+    if action_name == "send_whatsapp_message":
+        return "risky"
 
     if words.intersection(RISKY_KEYWORDS):
         return "risky"

@@ -253,3 +253,94 @@ def decide_action(task, screenshot, history_summary=""):
         ) from error
 
     return validate_action(action_data)
+
+def classify_skill(instruction):
+    """
+    Classify a user instruction into a supported skill.
+    Returns a skill name or None.
+    This function uses text only; no screenshot is sent.
+    """
+
+    if not isinstance(instruction, str) or not instruction.strip():
+        return None
+
+    if not MODEL or not os.getenv("GROQ_API_KEY"):
+        print("[SKILL CLASSIFIER] Groq configuration missing.")
+        return None
+
+    skill_prompt = """
+    You are a skill classifier for a desktop AI assistant.
+
+    Choose a skill only when it clearly matches the user's intended task.
+
+    Available skills:
+    - open_app: Launch a supported installed application.
+    - search_web: Search the web for a query.
+    - send_whatsapp_message: Send a WhatsApp message to a phone number.
+    - open_file_explorer: Open a folder in Windows File Explorer.
+    - take_screenshot: Capture and save a screenshot.
+
+    Rules:
+    - Do not execute any task.
+    - Do not invent a skill.
+    - If no skill clearly matches, return null.
+    - If the instruction is ambiguous, return null.
+    - Do not select a skill for a task that merely discusses that skill.
+    - Return valid JSON only.
+
+    Required JSON format:
+    {
+    "skill_name": "open_app | search_web | send_whatsapp_message | open_file_explorer | take_screenshot | null",
+    "reason": "One short sentence"
+    }
+"""
+
+    model = ChatGroq(
+        model=MODEL,
+        temperature=0,
+        max_tokens=150,
+        max_retries=2,
+        timeout=30,
+        model_kwargs={
+            "response_format": {"type": "json_object"}
+        },
+    )
+
+    messages = [
+        SystemMessage(content=skill_prompt),
+        HumanMessage(
+            content=f"Classify this user instruction:\n{instruction}"
+        ),
+    ]
+
+    try:
+        response = model.invoke(messages)
+        result = json.loads(response.content)
+
+        if not isinstance(result, dict):
+            return None
+
+        skill_name = result.get("skill_name")
+
+        allowed_skills = {
+            "open_app",
+            "search_web",
+            "send_whatsapp_message",
+            "open_file_explorer",
+            "take_screenshot",
+        }
+
+        if skill_name not in allowed_skills:
+            print("[SKILL CLASSIFIER] No suitable skill found.")
+            return None
+
+        print(
+            f"[SKILL CLASSIFIER] Selected: {skill_name} | "
+            f"Reason: {result.get('reason', '')}"
+        )
+
+        return skill_name
+
+    except Exception as error:
+        print(f"[SKILL CLASSIFIER] Failed: {error}")
+        return None
