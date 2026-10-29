@@ -1,9 +1,11 @@
+
 import base64
 import json
 import os
 import string
 from io import BytesIO
 from pathlib import Path
+import re
 
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
@@ -16,7 +18,14 @@ load_dotenv(PROJECT_DIR / ".env")
 
 MODEL = os.getenv("GROQ_MODEL")
 
-ALLOWED_ACTIONS = {"click", "type", "press", "scroll", "wait", "done"}
+ALLOWED_ACTIONS = {
+    "click",
+    "type",
+    "press",
+    "scroll",
+    "wait",
+    "done",
+}
 
 VALID_CELLS = {
     f"{column}{row}"
@@ -52,7 +61,8 @@ Rules:
 - For type, text must contain the exact text to type.
 - For press, key must contain one keyboard key.
 - For scroll, scroll_direction must be "up" or "down".
-- For wait and done, grid_cell must be null and unused fields empty.
+- For wait and done, grid_cell must be JSON null.
+- For wait and done, unused fields must be empty strings.
 - target must briefly describe the intended screen element or operation.
 - risk_level must be either "safe" or "risky".
 - Mark actions risky if they involve sending messages or emails,
@@ -104,7 +114,7 @@ def image_to_url(image):
 
 
 def validate_action(action_data):
-    """Validate the model's action JSON before returning it."""
+    """Validate model output without weakening action safety checks."""
 
     if not isinstance(action_data, dict):
         raise ValueError("Model response must be a JSON object.")
@@ -133,7 +143,13 @@ def validate_action(action_data):
     if not isinstance(action, str) or action not in ALLOWED_ACTIONS:
         raise ValueError(f"Unsupported action: {action!r}")
 
-    for field in ("text", "key", "target", "reason", "scroll_direction"):
+    for field in (
+        "text",
+        "key",
+        "target",
+        "reason",
+        "scroll_direction",
+    ):
         if not isinstance(action_data[field], str):
             raise ValueError(f"{field} must be a string.")
 
@@ -147,20 +163,52 @@ def validate_action(action_data):
             "risk_level must be either 'safe' or 'risky'."
         )
 
-    grid_cell = action_data["grid_cell"]
+    raw_grid_cell = action_data["grid_cell"]
 
     if action == "click":
-        if not isinstance(grid_cell, str) or grid_cell not in VALID_CELLS:
+        if not isinstance(raw_grid_cell, str):
+            raise ValueError(
+                "Click actions require a string grid_cell."
+            )
+
+        grid_cell = raw_grid_cell.strip().upper()
+
+        grid_cell = re.sub(
+            r"^([A-P])[\s.*-]+(\d{1,2})$",
+            r"\1\2",
+            grid_cell,
+        )
+
+        if grid_cell not in VALID_CELLS:
             raise ValueError(
                 f"Invalid grid cell: {grid_cell!r}. "
                 "Expected a valid cell from A1 to P16."
             )
 
+        action_data["grid_cell"] = grid_cell
+
     elif action in {"wait", "done"}:
-        if grid_cell is not None:
+        if raw_grid_cell is not None:
             raise ValueError(
                 f"{action!r} actions must have grid_cell set to null."
             )
+
+        action_data["grid_cell"] = None
+
+        for field in ("text", "key", "scroll_direction"):
+            if action_data[field]:
+                raise ValueError(
+                    f"{action!r} actions must have an empty "
+                    f"{field!r} field."
+                )
+
+    else:
+        if raw_grid_cell is not None:
+            raise ValueError(
+                f"{action!r} actions must have grid_cell set to null."
+            )
+
+        action_data["grid_cell"] = None
 
     if action == "type" and not action_data["text"]:
         raise ValueError("Text action cannot be empty.")
@@ -180,10 +228,7 @@ def validate_action(action_data):
 
 
 def decide_action(task, screenshot, history_summary=""):
-    """
-    Ask the vision model for one action.
-    This function does not control the mouse or keyboard.
-    """
+    """Ask the vision model for one action without controlling the UI."""
 
     if not isinstance(task, str) or not task.strip():
         raise ValueError("Please provide a non-empty task.")
@@ -204,7 +249,7 @@ def decide_action(task, screenshot, history_summary=""):
         model=MODEL,
         temperature=0,
         max_tokens=300,
-        max_retries=3,
+        max_retries=0,
         timeout=90,
         model_kwargs={
             "response_format": {"type": "json_object"}
@@ -223,6 +268,8 @@ def decide_action(task, screenshot, history_summary=""):
                         f"{history_summary or 'No previous actions.'}\n\n"
                         "Analyze the screenshot and choose the next action. "
                         "Return a valid grid cell for every click. "
+                        "For wait or done, return JSON null for grid_cell "
+                        "and empty strings for unused fields. "
                         "If a safe and valid next action cannot be identified, "
                         "return wait. Do not repeat a failed or rejected action."
                     ),
@@ -252,95 +299,45 @@ def decide_action(task, screenshot, history_summary=""):
             f"Model did not return valid JSON: {content}"
         ) from error
 
-    return validate_action(action_data)
+    try:
+        return validate_action(action_data)
+    except (TypeError, ValueError) as error:
+        print("[BRAIN] Invalid model action:", action_data)
+        raise ValueError(
+            f"Action validation failed: {error}"
+        ) from error
+
 
 def classify_skill(instruction):
-    """
-    Classify a user instruction into a supported skill.
-    Returns a skill name or None.
-    This function uses text only; no screenshot is sent.
-    """
+    """Classify simple supported tasks locally without an LLM call."""
 
     if not isinstance(instruction, str) or not instruction.strip():
         return None
 
-    if not MODEL or not os.getenv("GROQ_API_KEY"):
-        print("[SKILL CLASSIFIER] Groq configuration missing.")
-        return None
+    task = re.sub(r"\s+", " ", instruction.strip().lower())
+    task = task.rstrip(".!?")
 
-    skill_prompt = """
-    You are a skill classifier for a desktop AI assistant.
-
-    Choose a skill only when it clearly matches the user's intended task.
-
-    Available skills:
-    - open_app: Launch a supported installed application.
-    - search_web: Search the web for a query.
-    - send_whatsapp_message: Send a WhatsApp message to a phone number.
-    - open_file_explorer: Open a folder in Windows File Explorer.
-    - take_screenshot: Capture and save a screenshot.
-
-    Rules:
-    - Do not execute any task.
-    - Do not invent a skill.
-    - If no skill clearly matches, return null.
-    - If the instruction is ambiguous, return null.
-    - Do not select a skill for a task that merely discusses that skill.
-    - Return valid JSON only.
-
-    Required JSON format:
-    {
-    "skill_name": "open_app | search_web | send_whatsapp_message | open_file_explorer | take_screenshot | null",
-    "reason": "One short sentence"
-    }
-"""
-
-    model = ChatGroq(
-        model=MODEL,
-        temperature=0,
-        max_tokens=150,
-        max_retries=2,
-        timeout=30,
-        model_kwargs={
-            "response_format": {"type": "json_object"}
-        },
+    app_pattern = (
+        r"(?:open|launch|start|run)\s+"
+        r"(notepad|calculator|calc|paint|command prompt|cmd|"
+        r"powershell|task manager)"
     )
 
-    messages = [
-        SystemMessage(content=skill_prompt),
-        HumanMessage(
-            content=f"Classify this user instruction:\n{instruction}"
-        ),
-    ]
+    app_match = re.fullmatch(app_pattern, task)
 
-    try:
-        response = model.invoke(messages)
-        result = json.loads(response.content)
+    if app_match:
+        return "open_app"
 
-        if not isinstance(result, dict):
-            return None
+    if re.fullmatch(
+        r"(?:take|capture|save)\s+(?:a\s+)?screenshot",
+        task,
+    ):
+        return "take_screenshot"
 
-        skill_name = result.get("skill_name")
+    if re.fullmatch(
+        r"(?:open|launch)\s+(?:file explorer|windows explorer|explorer)",
+        task,
+    ):
+        return "open_file_explorer"
 
-        allowed_skills = {
-            "open_app",
-            "search_web",
-            "send_whatsapp_message",
-            "open_file_explorer",
-            "take_screenshot",
-        }
-
-        if skill_name not in allowed_skills:
-            print("[SKILL CLASSIFIER] No suitable skill found.")
-            return None
-
-        print(
-            f"[SKILL CLASSIFIER] Selected: {skill_name} | "
-            f"Reason: {result.get('reason', '')}"
-        )
-
-        return skill_name
-
-    except Exception as error:
-        print(f"[SKILL CLASSIFIER] Failed: {error}")
-        return None
+    return None

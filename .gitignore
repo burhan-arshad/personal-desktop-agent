@@ -32,6 +32,7 @@ logs/
 screenshots/
 *.tmp.png
 *.tmp.jpg
+*.tmp.jpeg
 .env
 venv/
 __pycache__/
@@ -58,4 +59,6 @@ test_brain.py
 test_phase4_graph.py
 safety_audit.jsonl
 test_skills.py
+PyWhatKit_DB.txt
 memory/screenshots/
+test_hitl.py

@@ -1,4 +1,3 @@
-
 from typing import TypedDict
 from uuid import uuid4
 from io import BytesIO
@@ -10,15 +9,14 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import interrupt, Command
 
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-
 from perception.perception import capture_grid
-from brain.brain import decide_action
+from perception.verification import verify_screen_change
+from brain.brain import decide_action, classify_skill
 from actuator.actuator import execute_action
 from safety.safety import classify_risk, log_decision
 from memory.memory import (
@@ -29,15 +27,18 @@ from memory.memory import (
     log_confirmation,
 )
 from skills.skills import SKILL_REGISTRY
-from brain.brain import classify_skill
 
-MAX_STEPS = 8
+
+MAX_STEPS = 4
+MAX_UNCHANGED_ATTEMPTS = 1
+
 SCREENSHOT_DIR = PROJECT_ROOT / "memory" / "screenshots"
 
 
 class AgentState(TypedDict):
     instruction: str
     current_image: bytes
+    pre_action_image: bytes
     last_action: dict
     history: list
     step_count: int
@@ -50,6 +51,10 @@ class AgentState(TypedDict):
     skill_payload: dict
     execution_mode: str
     skill_error: str
+    unchanged_count: int
+    verification_feedback: str
+    last_verification: dict
+    api_error: str
 
 
 def summarize_recent(history):
@@ -86,11 +91,9 @@ def skill_match_node(state: AgentState) -> dict:
     print("\n[SKILL MATCH] Resolving user instruction...")
 
     skill_name = classify_skill(state["instruction"])
+
     if not skill_name:
-        print(
-            "[SKILL MATCH] No skill matched. "
-            "Using vision loop."
-        )
+        print("[SKILL MATCH] No skill matched. Using vision loop.")
 
         return {
             "skill_name": "",
@@ -102,7 +105,7 @@ def skill_match_node(state: AgentState) -> dict:
     skill = SKILL_REGISTRY.get(skill_name)
 
     if skill is None:
-        print("[SKILL MATCH] Unknown skill. Falling back to vision.")
+        print("[SKILL MATCH] Unknown skill. Using vision loop.")
 
         return {
             "skill_name": "",
@@ -121,7 +124,6 @@ def skill_match_node(state: AgentState) -> dict:
 
     except Exception as error:
         message = str(error)
-
         print(f"[SKILL PREPARATION ERROR] {message}")
 
         return {
@@ -201,41 +203,130 @@ def capture_node(state: AgentState) -> dict:
     image_buffer = BytesIO()
     grid_image.save(image_buffer, format="PNG")
 
+    print("[CAPTURE] Screenshot captured.")
+
     return {
         "current_image": image_buffer.getvalue(),
     }
 
 
+def route_after_capture(state: AgentState):
+    if state["pre_action_image"]:
+        return "verify"
+
+    return "think"
+
+
 def think_node(state: AgentState) -> dict:
     print("\n[THINK] Asking the Brain for the next action...")
 
-    current_image = Image.open(
-        BytesIO(state["current_image"])
-    ).convert("RGB")
+    instruction = state["instruction"].strip().lower()
 
-    history_summary = summarize_recent(state["history"])
-
-    action = decide_action(
-        state["instruction"],
-        current_image,
-        history_summary,
+    # Simple click tasks should not trigger repeated exploratory clicks.
+    is_simple_click_task = (
+        instruction.startswith("click ")
+        or instruction.startswith("click inside ")
+        or instruction.startswith("click on ")
     )
+
+    # If a click was already executed for a simple click task,
+    # stop rather than asking the vision model for another click.
+    if (
+        is_simple_click_task
+        and state["step_count"] >= 1
+    ):
+        message = (
+            "A click action has already been executed for this "
+            "simple click task. Stopping to avoid repeated clicks. "
+            "Visual verification does not establish task completion."
+        )
+
+        print(f"\n[STOP] {message}")
+
+        return {
+            "last_action": {
+                "action": "done",
+                "grid_cell": None,
+                "text": "",
+                "key": "",
+                "scroll_direction": "",
+                "target": "",
+                "risk_level": "safe",
+                "reason": message,
+            },
+            "is_done": True,
+            "human_approved": False,
+            "verification_feedback": message,
+        }
+
+    try:
+        current_image = Image.open(
+            BytesIO(state["current_image"])
+        ).convert("RGB")
+
+        history_summary = summarize_recent(state["history"])
+
+        if state["verification_feedback"]:
+            history_summary += (
+                "\n\nLatest visual verification feedback: "
+                f"{state['verification_feedback']}"
+            )
+
+        action = decide_action(
+            state["instruction"],
+            current_image,
+            history_summary,
+        )
+
+    except Exception as error:
+        error_text = str(error)
+        error_lower = error_text.lower()
+
+        is_rate_limit = (
+            "429" in error_text
+            or "rate limit" in error_lower
+            or "too many requests" in error_lower
+            or "tokens per minute" in error_lower
+            or "requests per minute" in error_lower
+        )
+
+        if not is_rate_limit:
+            raise
+
+        message = (
+            "Groq rate limit reached. Agent stopped without "
+            "retrying to conserve API quota."
+        )
+
+        print(f"\n[RATE LIMIT] {message}")
+        print(f"[RATE LIMIT DETAILS] {error_text[:400]}")
+
+        return {
+            "api_error": message,
+            "is_done": True,
+            "human_approved": False,
+            "last_action": {
+                "action": "done",
+                "grid_cell": None,
+                "text": "",
+                "key": "",
+                "scroll_direction": "",
+                "target": "",
+                "risk_level": "safe",
+                "reason": message,
+            },
+            "verification_feedback": message,
+        }
 
     print(f"Proposed action: {action}")
 
-    if action.get("action") == "wait":
+    if action.get("action") in {"wait", "done"}:
         reason = action.get(
             "reason",
-            "The next action or target is unclear.",
+            "The task is complete or the next action is unclear.",
         )
 
-        print("[STOP] Brain cannot identify a clear next action.")
-        print(f"[REASON] {reason}")
-
-        history_entry = {
-            **action,
-            "result": "stopped_unclear_target",
-        }
+        print(f"[STOP] {reason}")
 
         return {
             "last_action": {
@@ -243,49 +334,48 @@ def think_node(state: AgentState) -> dict:
                 "action": "done",
                 "grid_cell": None,
             },
-            "history": state["history"] + [history_entry],
+            "history": state["history"] + [
+                {
+                    **action,
+                    "result": "stopped_or_completed",
+                }
+            ],
             "is_done": True,
             "human_approved": False,
+            "verification_feedback": "",
         }
 
-    if len(state["history"]) >= 2:
-        previous_actions = state["history"][-2:]
+    previous = state["last_action"]
 
-        repeated = all(
-            item.get("action") == action.get("action")
-            and item.get("target") == action.get("target")
-            and item.get("grid_cell") == action.get("grid_cell")
-            and item.get("scroll_direction")
-            == action.get("scroll_direction")
-            for item in previous_actions
+    if (
+        state["unchanged_count"] > 0
+        and previous
+        and action.get("action") == previous.get("action")
+        and action.get("grid_cell") == previous.get("grid_cell")
+        and action.get("target") == previous.get("target")
+    ):
+        message = (
+            "Repeated action rejected locally after unchanged "
+            "verification. Stopping to conserve API quota."
         )
 
-        if repeated:
-            print(
-                "[STOP] Repeated action detected. "
-                "Stopping to prevent unnecessary actions."
-            )
+        print(f"[STOP] {message}")
 
-            return {
-                "last_action": {
-                    "action": "done",
-                    "grid_cell": None,
-                    "text": "",
-                    "key": "",
-                    "scroll_direction": "",
-                    "target": "",
-                    "risk_level": "safe",
-                    "reason": "Repeated action detected.",
-                },
-                "is_done": True,
-                "human_approved": False,
-                "history": state["history"] + [
-                    {
-                        **action,
-                        "result": "stopped_repeated_action",
-                    }
-                ],
-            }
+        return {
+            "last_action": {
+                "action": "done",
+                "grid_cell": None,
+                "text": "",
+                "key": "",
+                "scroll_direction": "",
+                "target": "",
+                "risk_level": "safe",
+                "reason": message,
+            },
+            "is_done": True,
+            "human_approved": False,
+            "verification_feedback": message,
+        }
 
     history_entry = {
         **action,
@@ -295,8 +385,9 @@ def think_node(state: AgentState) -> dict:
     return {
         "last_action": action,
         "history": state["history"] + [history_entry],
-        "is_done": action.get("action") == "done",
+        "is_done": False,
         "human_approved": False,
+        "verification_feedback": "",
     }
 
 
@@ -346,7 +437,6 @@ def safety_check_node(state: AgentState) -> dict:
 
     if risk == "blocked":
         print("[SAFETY] Blocked action will NOT be executed.")
-
         log_decision(action, risk, "blocked")
 
         return {
@@ -362,7 +452,6 @@ def safety_check_node(state: AgentState) -> dict:
 
     if risk == "safe":
         print("[SAFETY] Safe action; no human approval required.")
-
         log_decision(action, risk, "auto-approved")
 
         return {
@@ -406,21 +495,12 @@ def human_review_node(state: AgentState) -> dict:
         }
     )
 
-    approved = (
-        str(decision).strip().lower()
-        in {"yes", "y"}
-    )
-
+    approved = str(decision).strip().lower() in {"yes", "y"}
     response = "approved" if approved else "denied"
 
-    log_decision(
-        action,
-        state["risk_level"],
-        response,
-    )
+    log_decision(action, state["risk_level"], response)
 
     conn = init_db()
-
     try:
         log_confirmation(
             conn,
@@ -432,7 +512,6 @@ def human_review_node(state: AgentState) -> dict:
 
     if approved:
         print("\n[HUMAN REVIEW] Action approved.")
-
         return {
             "human_approved": True,
             "history": update_latest_history(
@@ -442,7 +521,6 @@ def human_review_node(state: AgentState) -> dict:
         }
 
     print("\n[HUMAN REVIEW] Action denied. Skipping execution.")
-
     return {
         "human_approved": False,
         "history": update_latest_history(
@@ -450,27 +528,21 @@ def human_review_node(state: AgentState) -> dict:
             "user denied this action; not executed",
         ),
         "step_count": state["step_count"] + 1,
+        "is_done": True,
     }
-
 
 def route_after_human(state: AgentState):
     if state["human_approved"]:
         return "act"
 
-    if state["execution_mode"] == "skill":
-        return END
-
-    if state["step_count"] >= MAX_STEPS:
-        return END
-
-    return "capture"
+    return END
 
 
 def record_action_failure(
     state: AgentState,
     error: Exception,
 ):
-    """Update the existing database step if execution fails."""
+    """Record action execution failure and save its screenshot."""
 
     screenshot_path = None
     error_details = f"\nExecution failed: {error}"
@@ -516,9 +588,7 @@ def record_action_failure(
                 state["current_step_id"],
             ),
         )
-
         conn.commit()
-
     finally:
         conn.close()
 
@@ -528,23 +598,14 @@ def act_node(state: AgentState) -> dict:
     risk = state["risk_level"]
 
     if risk == "blocked":
-        raise RuntimeError(
-            "Blocked action cannot be executed."
-        )
+        raise RuntimeError("Blocked action cannot be executed.")
 
     if risk not in {"safe", "risky"}:
-        raise RuntimeError(
-            f"Invalid risk level: {risk}"
-        )
+        raise RuntimeError(f"Invalid risk level: {risk}")
 
     if not state["human_approved"]:
         raise RuntimeError(
             "Action cannot execute without approval."
-        )
-
-    if risk == "risky" and not state["human_approved"]:
-        raise RuntimeError(
-            "Risky action requires explicit approval."
         )
 
     print("\n[ACT] Executing the approved or safe action.")
@@ -561,9 +622,7 @@ def act_node(state: AgentState) -> dict:
                     f"Skill is not registered: {skill_name}"
                 )
 
-            result = skill["execute"](
-                state["skill_payload"]
-            )
+            result = skill["execute"](state["skill_payload"])
 
             print(f"[SKILL RESULT] {result}")
 
@@ -596,6 +655,7 @@ def act_node(state: AgentState) -> dict:
         raise
 
     return {
+        "pre_action_image": state["current_image"],
         "history": update_latest_history(
             state,
             "executed; awaiting visual verification",
@@ -604,12 +664,128 @@ def act_node(state: AgentState) -> dict:
     }
 
 
+def verify_node(state: AgentState) -> dict:
+    print("\n[VERIFY] Comparing before and after screenshots...")
+
+    before = state["pre_action_image"]
+    after = state["current_image"]
+
+    if not before or not after:
+        feedback = (
+            "Visual verification unavailable. "
+            "The action may have succeeded, but its outcome "
+            "cannot be confirmed."
+        )
+
+        print(f"[VERIFY] {feedback}")
+
+        return {
+            "pre_action_image": b"",
+            "verification_feedback": feedback,
+            "last_verification": {"status": "unavailable"},
+            "history": update_latest_history(
+                state,
+                "verification unavailable; outcome uncertain",
+            ),
+        }
+
+    try:
+        result = verify_screen_change(before, after)
+
+    except Exception as error:
+        feedback = (
+            f"Visual verification failed: {error}. "
+            "The action outcome is uncertain."
+        )
+
+        print(f"[VERIFY] {feedback}")
+
+        return {
+            "pre_action_image": b"",
+            "verification_feedback": feedback,
+            "last_verification": {
+                "status": "error",
+                "error": str(error),
+            },
+            "history": update_latest_history(
+                state,
+                "verification error; outcome uncertain",
+            ),
+        }
+
+    difference = result["difference"]
+
+    if result["screen_changed"]:
+        unchanged_count = 0
+        feedback = (
+            f"Screen changed (difference={difference}), "
+            "but task completion is not confirmed."
+        )
+        history_result = (
+            f"verification: screen changed (difference={difference}); "
+            "task success not confirmed"
+        )
+
+    else:
+        unchanged_count = state["unchanged_count"] + 1
+        feedback = (
+            f"No significant screen change "
+            f"(difference={difference}). "
+            "The action may still have succeeded. "
+            "Stopping to avoid unnecessary repeated actions."
+        )
+        history_result = (
+            f"verification: screen unchanged "
+            f"(difference={difference}); outcome uncertain"
+        )
+
+    print(f"[VERIFY] {feedback}")
+
+    return {
+        "pre_action_image": b"",
+        "unchanged_count": unchanged_count,
+        "verification_feedback": feedback,
+        "last_verification": result,
+        "history": update_latest_history(
+            state,
+            history_result,
+        ),
+    }
+
+def route_after_verify(state: AgentState):
+    verification = state.get("last_verification", {})
+    status = verification.get("status")
+
+    if status in {"unchanged", "error", "unavailable"}:
+        print(
+            "\n[VERIFY] Outcome could not be confirmed. "
+            "Stopping without another Groq call."
+        )
+        return END
+
+    if state["unchanged_count"] >= MAX_UNCHANGED_ATTEMPTS:
+        print(
+            "\n[VERIFY] Unchanged screen limit reached. "
+            "Stopping without another Groq call."
+        )
+        return END
+
+    if state["step_count"] >= MAX_STEPS:
+        print("\n[ROUTER] Maximum attempt limit reached.")
+        return END
+
+    return "think"
+
+
 def after_act(state: AgentState):
     if state["is_done"]:
         return END
 
     if state["step_count"] >= MAX_STEPS:
         print("\n[ROUTER] Maximum attempt limit reached.")
+        return END
+
+    if state["execution_mode"] == "skill":
         return END
 
     return "capture"
@@ -623,6 +799,7 @@ graph.add_node("think", think_node)
 graph.add_node("safety_check", safety_check_node)
 graph.add_node("human_review", human_review_node)
 graph.add_node("act", act_node)
+graph.add_node("verify", verify_node)
 
 graph.add_edge(START, "skill_match")
 
@@ -636,7 +813,14 @@ graph.add_conditional_edges(
     },
 )
 
-graph.add_edge("capture", "think")
+graph.add_conditional_edges(
+    "capture",
+    route_after_capture,
+    {
+        "think": "think",
+        "verify": "verify",
+    },
+)
 
 graph.add_conditional_edges(
     "think",
@@ -676,6 +860,15 @@ graph.add_conditional_edges(
     },
 )
 
+graph.add_conditional_edges(
+    "verify",
+    route_after_verify,
+    {
+        "think": "think",
+        END: END,
+    },
+)
+
 checkpointer = MemorySaver()
 app = graph.compile(checkpointer=checkpointer)
 
@@ -691,6 +884,7 @@ def run_agent(instruction: str):
         initial_state: AgentState = {
             "instruction": instruction,
             "current_image": b"",
+            "pre_action_image": b"",
             "last_action": {},
             "history": [],
             "step_count": 0,
@@ -703,6 +897,10 @@ def run_agent(instruction: str):
             "skill_payload": {},
             "execution_mode": "vision",
             "skill_error": "",
+            "unchanged_count": 0,
+            "verification_feedback": "",
+            "last_verification": {},
+            "api_error": "",
         }
 
         config = {
@@ -728,31 +926,24 @@ def run_agent(instruction: str):
 
                     if node_name == "__interrupt__":
                         interrupted = True
-
                         interrupt_info = changes[0].value
                         risky_action = interrupt_info["action"]
 
                         print("\n" + "=" * 45)
                         print("[HUMAN REVIEW REQUIRED]")
-                        print(
-                            f"Risk: {interrupt_info['risk_level']}"
-                        )
+                        print(f"Risk: {interrupt_info['risk_level']}")
                         print(f"Action: {risky_action}")
                         print(
-                            f"Target: "
-                            f"{risky_action.get('target', '')}"
+                            f"Target: {risky_action.get('target', '')}"
                         )
                         print(
-                            f"Text: "
-                            f"{risky_action.get('text', '')}"
+                            f"Text: {risky_action.get('text', '')}"
                         )
                         print(
-                            f"Payload: "
-                            f"{risky_action.get('payload', {})}"
+                            f"Payload: {risky_action.get('payload', {})}"
                         )
                         print(
-                            f"Reason: "
-                            f"{risky_action.get('reason', '')}"
+                            f"Reason: {risky_action.get('reason', '')}"
                         )
                         print("=" * 45)
 
@@ -773,32 +964,79 @@ def run_agent(instruction: str):
 
         final_state = app.get_state(config).values
 
-        if final_state.get("step_count", 0) >= MAX_STEPS:
-            final_status = "max_steps_reached"
-        else:
-            final_status = "completed"
+        verification = final_state.get("last_verification", {})
+        verification_status = verification.get("status")
 
-        if final_state.get("skill_error"):
+        if final_state.get("api_error"):
             final_status = "error"
+            display_status = "api_rate_limited"
+
+        elif final_state.get("skill_error"):
+            final_status = "error"
+            display_status = "error"
+
         elif final_state.get("risk_level") == "blocked":
-            final_status = "blocked"
+            final_status = "error"
+            display_status = "blocked"
+
+        elif (
+            verification_status in {
+                "unchanged",
+                "error",
+                "unavailable",
+            }
+            or verification.get("screen_changed") is False
+        ):
+            final_status = "error"
+            display_status = "verification_failed"
+
+        elif final_state.get("step_count", 0) >= MAX_STEPS:
+            final_status = "max_steps_reached"
+            display_status = "max_steps_reached"
+        elif (
+            final_state.get("human_approved") is False
+            and final_state.get("history")
+            and "user denied this action; not executed"
+            in final_state["history"][-1]
+        ):
+            final_status = "completed"
+            display_status = "denied"
+
+        elif final_state.get("is_done"):
+            final_status = "completed"
+            display_status = "completed"
+
+        else:
+            final_status = "error"
+            display_status = "error"
 
         print("\nAgent run finished.")
-        print(f"Session status: {final_status}")
+        print(f"Session status: {display_status}")
 
-    except Exception:
+        if final_state.get("api_error"):
+            print(f"API error: {final_state['api_error']}")
+
+        if final_state.get("skill_error"):
+            print(f"Skill error: {final_state['skill_error']}")
+
+        if final_state.get("verification_feedback"):
+            print(
+                "Verification feedback: "
+                f"{final_state['verification_feedback']}"
+            )
+
+        if verification:
+            print(f"Last verification: {verification}")
+
+    except Exception as error:
         final_status = "error"
-        print("\n[ERROR] Agent run failed.")
+        print(f"\n[ERROR] Agent run failed: {error}")
         raise
 
     finally:
         try:
             if session_id is not None:
-                end_session(
-                    conn,
-                    session_id,
-                    final_status,
-                )
+                end_session(conn, session_id, final_status)
 
                 print(
                     f"[MEMORY] Session {session_id} "
@@ -806,7 +1044,6 @@ def run_agent(instruction: str):
                 )
         finally:
             conn.close()
-
 
 if __name__ == "__main__":
     task = input("What should the AI do? ").strip()
