@@ -67,3 +67,4 @@ test_microphone.py
 test_whisper_models.py
 test_whisper.py
 test_voice_commands.py
+test_understanding.py

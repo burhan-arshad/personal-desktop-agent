@@ -1,4 +1,3 @@
-
 import os
 import tempfile
 import numpy as np
@@ -12,12 +11,21 @@ RECORD_SECONDS = 5
 MIC_DEVICE = 9
 SAMPLE_RATE = 48000
 GAIN = 5.0
+
 WHISPER_MODEL = "small"
 
+model = None
 
-print("Loading Whisper model...")
-model = whisper.load_model(WHISPER_MODEL)
-print("Whisper model loaded successfully.")
+
+def get_model():
+    global model
+
+    if model is None:
+        print("\nLoading Whisper model...")
+        model = whisper.load_model(WHISPER_MODEL)
+        print("Whisper model loaded successfully.")
+
+    return model
 
 
 def record_audio(duration=RECORD_SECONDS):
@@ -58,7 +66,7 @@ def amplify_audio(audio):
 
 
 def transcribe_audio(audio):
-    if audio is None:
+    if audio is None or audio.size == 0:
         return ""
 
     temp_path = None
@@ -80,13 +88,15 @@ def transcribe_audio(audio):
         ) as temp_file:
             temp_path = temp_file.name
 
-        write(temp_path, SAMPLE_RATE, amplified_audio)
-        write("voice_test.wav", SAMPLE_RATE, amplified_audio)
+        write(
+            temp_path,
+            SAMPLE_RATE,
+            amplified_audio
+        )
 
-        print("Amplified audio saved: voice_test.wav")
         print("Transcribing audio...")
 
-        result = model.transcribe(
+        result = get_model().transcribe(
             temp_path,
             fp16=False,
             language="en",
@@ -121,8 +131,16 @@ def listen_and_transcribe(duration=RECORD_SECONDS):
     return transcribe_audio(audio)
 
 
+def listen(duration=RECORD_SECONDS):
+    return listen_and_transcribe(duration)
+
+
 if __name__ == "__main__":
-    recognized_text = listen_and_transcribe()
+    recognized_text = listen()
 
     print("\nFinal Transcription:")
-    print(recognized_text if recognized_text else "No speech recognized.")
+    print(
+        recognized_text
+        if recognized_text
+        else "No speech recognized."
+    )

@@ -8,6 +8,7 @@ from PIL import Image
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import interrupt, Command
+from voice.voice import listen
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -1046,9 +1047,50 @@ def run_agent(instruction: str):
             conn.close()
 
 if __name__ == "__main__":
-    task = input("What should the AI do? ").strip()
+
+    print("\n" + "=" * 45)
+    print("       PERSONAL DESKTOP AI AGENT")
+    print("=" * 45)
+
+    print("\nSelect Input Mode:")
+    print("1. Text Input")
+    print("2. Voice Input")
+
+    choice = input("\nEnter your choice (1/2): ").strip()
+
+    task = ""
+
+    if choice == "1":
+
+        task = input("\nWhat should the AI do? ").strip()
+
+    elif choice == "2":
+
+        print("\n[VOICE MODE] Speak your command clearly.")
+
+        task = listen()
+
+        if task:
+            print(f"\n[VOICE COMMAND] {task}")
+        else:
+            print("\n[VOICE MODE] No command recognized.")
+
+    else:
+
+        print("\nInvalid choice. Please select 1 or 2.")
 
     if task:
-        run_agent(task)
+
+        confirmation = input(
+            "\nRun this command? (yes/no): "
+        ).strip().lower()
+
+        if confirmation == "yes":
+            run_agent(task)
+
+        else:
+            print("\nCommand cancelled by user.")
+
     else:
-        print("Please enter a task.")
+
+        print("\nNo valid instruction provided.")
