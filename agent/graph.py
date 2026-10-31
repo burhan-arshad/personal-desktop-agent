@@ -1048,49 +1048,119 @@ def run_agent(instruction: str):
 
 if __name__ == "__main__":
 
+    import json
+
+    from conversation.understanding import understand_message
+    from conversation.memory import (
+        get_active_conversation,
+        get_recent_history,
+        save_message,
+    )
+
+    conversation_id = get_active_conversation()
+
     print("\n" + "=" * 45)
     print("       PERSONAL DESKTOP AI AGENT")
     print("=" * 45)
 
-    print("\nSelect Input Mode:")
-    print("1. Text Input")
-    print("2. Voice Input")
+    print("\nConversation Mode Started")
+    print("You can talk naturally with your AI Agent.")
+    print("Type 'exit' to stop.\n")
 
-    choice = input("\nEnter your choice (1/2): ").strip()
+    while True:
 
-    task = ""
+        print("\nSelect Input Mode:")
+        print("1. Text Input")
+        print("2. Voice Input")
 
-    if choice == "1":
+        choice = input("\nEnter your choice (1/2): ").strip()
 
-        task = input("\nWhat should the AI do? ").strip()
+        user_message = ""
 
-    elif choice == "2":
+        if choice == "1":
 
-        print("\n[VOICE MODE] Speak your command clearly.")
+            user_message = input("\nYou: ").strip()
 
-        task = listen()
+        elif choice == "2":
 
-        if task:
-            print(f"\n[VOICE COMMAND] {task}")
-        else:
-            print("\n[VOICE MODE] No command recognized.")
+            print("\n[VOICE MODE] Speak your message.")
 
-    else:
+            user_message = listen()
 
-        print("\nInvalid choice. Please select 1 or 2.")
-
-    if task:
-
-        confirmation = input(
-            "\nRun this command? (yes/no): "
-        ).strip().lower()
-
-        if confirmation == "yes":
-            run_agent(task)
+            if user_message:
+                print(f"\nYou: {user_message}")
+            else:
+                print("\n[VOICE MODE] No command recognized.")
+                continue
 
         else:
-            print("\nCommand cancelled by user.")
 
-    else:
+            print("\nInvalid choice. Please select 1 or 2.")
+            continue
 
-        print("\nNo valid instruction provided.")
+        if not user_message:
+            continue
+
+        if user_message.lower() == "exit":
+            print("\nConversation paused.")
+            break
+
+        history = get_recent_history(
+            conversation_id,
+            limit=8
+        )
+
+        save_message(
+            conversation_id,
+            "user",
+            user_message
+        )
+
+        try:
+
+            result = understand_message(
+                user_message=user_message,
+                history=history
+            )
+
+            save_message(
+                conversation_id,
+                "assistant",
+                json.dumps(result, ensure_ascii=False)
+            )
+
+            if result["type"] == "conversation":
+
+                print(f"\nAgent: {result['response']}")
+
+                continue
+
+            elif result["type"] == "clarification":
+
+                print(
+                    f"\nAgent: {result['clarification_question']}"
+                )
+
+                continue
+
+            elif result["type"] == "action":
+
+                task = result["instruction"]
+
+                print(f"\n[UNDERSTOOD TASK] {task}")
+
+                confirmation = input(
+                    "\nShould I perform this action? (yes/no): "
+                ).strip().lower()
+
+                if confirmation in ["yes", "y"]:
+
+                    run_agent(task)
+
+                else:
+
+                    print("\nAction cancelled by user.")
+
+        except Exception as error:
+
+            print(f"\n[CONVERSATION ERROR] {error}")
