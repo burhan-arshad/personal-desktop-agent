@@ -99,7 +99,6 @@ def transcribe_audio(audio):
         result = get_model().transcribe(
             temp_path,
             fp16=False,
-            language="en",
             temperature=0,
             condition_on_previous_text=False,
             no_speech_threshold=0.6,
