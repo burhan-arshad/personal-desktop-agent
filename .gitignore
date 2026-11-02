@@ -69,3 +69,11 @@ test_whisper.py
 test_voice_commands.py
 test_understanding.py
 test_conversation_agent.py
+test_tts.py
+test_brain_coordinates.py
+test_region_detection.py
+test_uia.py
+test_pixel_coordinates.py
+test_uia_actuator.py
+test_uia_module.py
+test_uia_preparation.py

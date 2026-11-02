@@ -4,16 +4,19 @@ from io import BytesIO
 from pathlib import Path
 import sys
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+
+from perception.uia import prepare_taskbar_click
 from PIL import Image
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import interrupt, Command
 from voice.voice import listen
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+from voice.speech import speak
 
 from perception.perception import capture_grid
 from perception.verification import verify_screen_change
@@ -34,6 +37,85 @@ MAX_STEPS = 4
 MAX_UNCHANGED_ATTEMPTS = 1
 
 SCREENSHOT_DIR = PROJECT_ROOT / "memory" / "screenshots"
+TASKBAR_APP_ALIASES = {
+    "microsoft edge": [
+        "microsoft edge",
+        "edge",
+    ],
+    "google chrome": [
+        "google chrome",
+        "chrome",
+    ],
+    "file explorer": [
+        "file explorer",
+        "explorer",
+    ],
+    "visual studio code": [
+        "visual studio code",
+        "vs code",
+        "vscode",
+    ],
+    "whatsapp": [
+        "whatsapp",
+    ],
+    "microsoft store": [
+        "microsoft store",
+    ],
+}
+
+
+def resolve_taskbar_app(instruction: str):
+    """
+    Resolve a supported taskbar application from an explicit
+    open/launch/start instruction.
+
+    Returns the exact taskbar application name or None.
+    """
+
+    if not isinstance(instruction, str):
+        return None
+
+    text = instruction.strip().lower()
+
+    if not text:
+        return None
+
+    launch_intents = (
+        "open ",
+        "launch ",
+        "start ",
+        "run ",
+    )
+
+    has_launch_intent = any(
+        text.startswith(intent)
+        for intent in launch_intents
+    )
+
+    has_taskbar_intent = (
+        "taskbar" in text
+        and (
+            "click" in text
+            or "open" in text
+        )
+    )
+
+    if not has_launch_intent and not has_taskbar_intent:
+        return None
+
+    matches = []
+
+    for app_name, aliases in TASKBAR_APP_ALIASES.items():
+        for alias in aliases:
+            if alias in text:
+                matches.append(app_name)
+                break
+
+    # Avoid guessing when multiple applications are mentioned.
+    if len(matches) != 1:
+        return None
+
+    return matches[0]
 
 
 class AgentState(TypedDict):
@@ -91,6 +173,68 @@ def update_latest_history(state, result):
 def skill_match_node(state: AgentState) -> dict:
     print("\n[SKILL MATCH] Resolving user instruction...")
 
+    # First, check whether this is a supported taskbar launch request.
+    app_name = resolve_taskbar_app(state["instruction"])
+
+    if app_name:
+        print(f"[UIA] Taskbar application request detected: {app_name}")
+
+        try:
+            result = prepare_taskbar_click(app_name)
+
+            if not result["found"]:
+                message = result["reason"]
+
+                print(f"[UIA] {message}")
+
+                return {
+                    "skill_name": "",
+                    "skill_payload": {},
+                    "execution_mode": "vision",
+                    "skill_error": "",
+                    "verification_feedback": (
+                        f"UI Automation could not locate {app_name}: "
+                        f"{message}"
+                    ),
+                }
+
+            action = result["action"]
+
+            print(f"[UIA] Element located: {result['element']}")
+            print("[UIA] Click action prepared. No click executed.")
+
+            return {
+                "skill_name": "",
+                "skill_payload": {},
+                "execution_mode": "uia",
+                "skill_error": "",
+                "last_action": action,
+                "history": state["history"] + [
+                    {
+                        **action,
+                        "result": "proposed",
+                    }
+                ],
+                "is_done": False,
+                "human_approved": False,
+            }
+
+        except Exception as error:
+            message = str(error)
+
+            print(f"[UIA ERROR] {message}")
+
+            return {
+                "skill_name": "",
+                "skill_payload": {},
+                "execution_mode": "vision",
+                "skill_error": "",
+                "verification_feedback": (
+                    f"UI Automation preparation failed: {message}"
+                ),
+            }
+
+    # Existing skill system remains unchanged in behavior.
     skill_name = classify_skill(state["instruction"])
 
     if not skill_name:
@@ -185,16 +329,17 @@ def skill_match_node(state: AgentState) -> dict:
         "human_approved": False,
     }
 
-
 def route_after_skill_match(state: AgentState):
     if state["skill_error"] or state["is_done"]:
         return END
+
+    if state["execution_mode"] == "uia":
+        return "capture"
 
     if state["skill_name"]:
         return "safety_check"
 
     return "capture"
-
 
 def capture_node(state: AgentState) -> dict:
     print("\n[CAPTURE] Taking a fresh screenshot...")
@@ -213,10 +358,15 @@ def capture_node(state: AgentState) -> dict:
 
 def route_after_capture(state: AgentState):
     if state["pre_action_image"]:
+        print("[ROUTER] Post-action screenshot detected. Routing to verify.")
         return "verify"
 
-    return "think"
+    if state["execution_mode"] == "uia":
+        print("[ROUTER] UIA mode detected. Skipping vision brain.")
+        return "safety_check"
 
+    print("[ROUTER] Vision mode detected. Routing to think.")
+    return "think"
 
 def think_node(state: AgentState) -> dict:
     print("\n[THINK] Asking the Brain for the next action...")
@@ -321,61 +471,49 @@ def think_node(state: AgentState) -> dict:
 
     print(f"Proposed action: {action}")
 
-    if action.get("action") in {"wait", "done"}:
+    if action.get("action") == "wait":
         reason = action.get(
             "reason",
-            "The task is complete or the next action is unclear.",
+            "Waiting for the screen to become ready.",
         )
 
-        print(f"[STOP] {reason}")
+        print(f"\n[WAIT] {reason}")
 
         return {
-            "last_action": {
-                **action,
-                "action": "done",
-                "grid_cell": None,
-            },
+            "last_action": action,
             "history": state["history"] + [
                 {
                     **action,
-                    "result": "stopped_or_completed",
+                    "result": "waiting",
+                }
+            ],
+            "is_done": False,
+            "human_approved": False,
+            "verification_feedback": (
+                "The agent waited for the screen to become ready. "
+                "A fresh screenshot is required before the next decision."
+            ),
+        }
+
+    if action.get("action") == "done":
+        reason = action.get(
+            "reason",
+            "The task has been marked complete.",
+        )
+
+        print(f"\n[STOP] {reason}")
+
+        return {
+            "last_action": action,
+            "history": state["history"] + [
+                {
+                    **action,
+                    "result": "completed",
                 }
             ],
             "is_done": True,
             "human_approved": False,
             "verification_feedback": "",
-        }
-
-    previous = state["last_action"]
-
-    if (
-        state["unchanged_count"] > 0
-        and previous
-        and action.get("action") == previous.get("action")
-        and action.get("grid_cell") == previous.get("grid_cell")
-        and action.get("target") == previous.get("target")
-    ):
-        message = (
-            "Repeated action rejected locally after unchanged "
-            "verification. Stopping to conserve API quota."
-        )
-
-        print(f"[STOP] {message}")
-
-        return {
-            "last_action": {
-                "action": "done",
-                "grid_cell": None,
-                "text": "",
-                "key": "",
-                "scroll_direction": "",
-                "target": "",
-                "risk_level": "safe",
-                "reason": message,
-            },
-            "is_done": True,
-            "human_approved": False,
-            "verification_feedback": message,
         }
 
     history_entry = {
@@ -393,6 +531,7 @@ def think_node(state: AgentState) -> dict:
 
 
 def should_continue(state: AgentState):
+
     if state["is_done"]:
         print("\n[ROUTER] Task stopped or marked complete.")
         return END
@@ -400,6 +539,10 @@ def should_continue(state: AgentState):
     if state["step_count"] >= MAX_STEPS:
         print("\n[ROUTER] Maximum attempt limit reached.")
         return END
+
+    if state["last_action"].get("action") == "wait":
+        print("\n[ROUTER] Wait requested. Capturing fresh screenshot.")
+        return "capture"
 
     return "safety_check"
 
@@ -820,6 +963,7 @@ graph.add_conditional_edges(
     {
         "think": "think",
         "verify": "verify",
+        "safety_check": "safety_check",
     },
 )
 
@@ -828,6 +972,7 @@ graph.add_conditional_edges(
     should_continue,
     {
         "safety_check": "safety_check",
+        "capture": "capture",
         END: END,
     },
 )
@@ -1130,16 +1275,18 @@ if __name__ == "__main__":
             )
 
             if result["type"] == "conversation":
+                response = result["response"]
 
-                print(f"\nAgent: {result['response']}")
+                print(f"\nAssistant: {response}")
+                speak(response)
 
                 continue
 
             elif result["type"] == "clarification":
+                question = result["clarification_question"]
 
-                print(
-                    f"\nAgent: {result['clarification_question']}"
-                )
+                print(f"\nAssistant: {question}")
+                speak(question)
 
                 continue
 
@@ -1148,6 +1295,7 @@ if __name__ == "__main__":
                 task = result["instruction"]
 
                 print(f"\n[UNDERSTOOD TASK] {task}")
+                speak(f"I understood your request. {task}. Should I perform this action?")
 
                 confirmation = input(
                     "\nShould I perform this action? (yes/no): "

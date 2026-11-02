@@ -1,19 +1,19 @@
 import ctypes
-from io import BytesIO
 from pathlib import Path
 import string
 
 import mss
-import pyautogui
 from PIL import Image, ImageDraw, ImageFont
 
-MAX_IMAGE_WIDTH=1024
-GRID_COLS=16
-GRID_ROWS=16
 
-PROJECT_ROOT=Path(__file__).resolve().parent.parent
-OUTPUT_DIR=PROJECT_ROOT/"phase0_sanity"
+MAX_IMAGE_WIDTH = 1024
+GRID_COLS = 16
+GRID_ROWS = 16
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+OUTPUT_DIR = PROJECT_ROOT / "phase0_sanity"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
 
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(2)
@@ -23,25 +23,31 @@ except (AttributeError, OSError):
     except (AttributeError, OSError):
         pass
 
+
 def taking_screenshot():
-    """Taking Screenshot and Returning Image in the form of PIL"""
+    """Capture the primary screen and return an original-resolution PIL image."""
     with mss.MSS() as screen:
-        monitor=screen.monitors[1]
-        screenshot=screen.grab(monitor)
+        monitor = screen.monitors[1]
+        screenshot = screen.grab(monitor)
+
         image = Image.frombytes(
             "RGB",
             screenshot.size,
             screenshot.rgb
         )
+
     return image
 
+
 def resize_screenshot(image):
+    """Resize an image while preserving its aspect ratio."""
     original_width, original_height = image.size
 
     if original_width <= MAX_IMAGE_WIDTH:
         return image.copy()
 
     scale = MAX_IMAGE_WIDTH / original_width
+
     new_width = MAX_IMAGE_WIDTH
     new_height = round(original_height * scale)
 
@@ -50,72 +56,105 @@ def resize_screenshot(image):
         Image.Resampling.LANCZOS
     )
 
+
 def draw_grid(image):
-    """Drawing Grid on Image like spreadsheet A1-H8"""
-    image=image.copy()
-    draw=ImageDraw.Draw(image, "RGBA")
+    """Draw a 16x16 coordinate grid for debugging."""
+    image = image.copy()
+    draw = ImageDraw.Draw(image, "RGBA")
 
-    width, height=image.size
-    cell_width=width/GRID_COLS
-    cell_height=height/GRID_ROWS
+    width, height = image.size
+
+    cell_width = width / GRID_COLS
+    cell_height = height / GRID_ROWS
+
     try:
-            font = ImageFont.truetype("arial.ttf", 14)
+        font = ImageFont.truetype("arial.ttf", 14)
     except OSError:
-            font = ImageFont.load_default()
+        font = ImageFont.load_default()
 
-    for col in range(GRID_COLS+1):
-        x=round(col*cell_width)
+    for col in range(GRID_COLS + 1):
+        x = round(col * cell_width)
+
         draw.line(
-            [(x,0),(x,height)],
+            [(x, 0), (x, height)],
             fill=(0, 220, 255, 190),
             width=1
         )
 
-    for row in range(GRID_ROWS+1):
-        y=round(row*cell_height)
+    for row in range(GRID_ROWS + 1):
+        y = round(row * cell_height)
+
         draw.line(
-            [(0,y),(width,y)],
+            [(0, y), (width, y)],
             fill=(0, 220, 255, 190),
             width=1
         )
 
-    columns=string.ascii_uppercase[:GRID_COLS]
+    columns = string.ascii_uppercase[:GRID_COLS]
 
     for row in range(GRID_ROWS):
         for col in range(GRID_COLS):
-            label=f"{columns[col]},{row+1}"
-            x=round(col*cell_width)+4
-            y=round(row*cell_height)+4
-            text_box=draw.textbbox((x,y), label, font=font)
+            label = f"{columns[col]},{row + 1}"
+
+            x = round(col * cell_width) + 4
+            y = round(row * cell_height) + 4
+
+            text_box = draw.textbbox(
+                (x, y),
+                label,
+                font=font
+            )
+
             draw.rounded_rectangle(
                 (
-                    text_box[0]-3,
-                    text_box[1]-2,
-                    text_box[2]+3,
-                    text_box[3]+2
+                    text_box[0] - 3,
+                    text_box[1] - 2,
+                    text_box[2] + 3,
+                    text_box[3] + 2
                 ),
                 radius=3,
                 fill=(0, 0, 0, 190)
             )
+
             draw.text(
-                (x,y),
+                (x, y),
                 label,
                 font=font,
                 fill=(255, 255, 255, 255)
             )
+
     return image
+
+
+def capture_clean_screenshot(save_image=False):
+    """
+    Capture a clean, original-resolution screenshot for AI analysis.
+    No resizing or grid overlay is applied.
+    """
+    image = taking_screenshot()
+
+    if save_image:
+        output_path = OUTPUT_DIR / "clean_screenshot.png"
+        image.save(output_path)
+
+        print(f"Clean screenshot size: {image.size}")
+        print(f"Clean screenshot saved: {output_path}")
+
+    return image
+
 
 def capture_grid(save_image=True):
     """
-    Will Capture image and Draw Grid on Image to Show it to AI.
+    Capture a screenshot and create a resized grid image for debugging only.
     """
-    original_image=taking_screenshot()
-    resized_image=resize_screenshot(original_image)
-    grid_image=draw_grid(resized_image)
+    original_image = taking_screenshot()
+    resized_image = resize_screenshot(original_image)
+    grid_image = draw_grid(resized_image)
 
     if save_image:
-        output_path=OUTPUT_DIR/"phase1_grid.png"
+        output_path = OUTPUT_DIR / "phase1_grid.png"
         grid_image.save(output_path)
+
         print(f"Original screen size: {original_image.size}")
         print(f"Grid image size: {grid_image.size}")
         print(f"Grid screenshot saved: {output_path}")
@@ -123,8 +162,19 @@ def capture_grid(save_image=True):
     return grid_image
 
 
-
 if __name__ == "__main__":
-    result=capture_grid()
-    result.show()
-    print("Perception Test Completed")
+
+    print("Testing clean screenshot...")
+    clean_image = capture_clean_screenshot(save_image=True)
+
+    print("\nTesting debug grid...")
+    grid_image = capture_grid(save_image=True)
+
+    print("\n========== PERCEPTION DIAGNOSTICS ==========")
+    print("Clean image size:", clean_image.size)
+    print("Grid image size:", grid_image.size)
+
+    print("\nPerception Test Completed.")
+
+    clean_image.show()
+    grid_image.show()
