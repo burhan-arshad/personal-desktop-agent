@@ -77,3 +77,12 @@ test_pixel_coordinates.py
 test_uia_actuator.py
 test_uia_module.py
 test_uia_preparation.py
+test_uia_element.py
+test_uia_type.py
+test_uia_prepare.py
+test_uia_inspector.py
+test_uia_safety.py
+test_uia_discovery.py
+test_uia_execution.py
+test_uia_window_guard.py
+test_taskbar.py

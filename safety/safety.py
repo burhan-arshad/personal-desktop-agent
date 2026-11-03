@@ -15,6 +15,8 @@ ALLOWED_ACTIONS = {
     "scroll",
     "wait",
     "done",
+    "uia_click",
+    "uia_type",
 }
 ALLOWED_SKILL_ACTIONS = {
     "open_app",
@@ -123,22 +125,28 @@ def classify_risk(action: dict) -> str:
     if not isinstance(action, dict):
         return "blocked"
 
-    action_name = str(action.get("action", "")).strip().lower()
+    action_name = str(
+        action.get("action", "")
+    ).strip().lower()
 
-    # Reject unknown actions before considering execution.
+    # Reject unknown actions.
     if action_name not in ALLOWED_ACTIONS | ALLOWED_SKILL_ACTIONS:
         return "blocked"
 
     text = action_text(action)
 
-    # Block known destructive system-operation patterns.
+    # Block destructive system-operation patterns.
     if any(
         normalize_text(pattern) in text
         for pattern in BLOCKED_PATTERNS
     ):
         return "blocked"
 
-    # Respect the model's risk assessment conservatively.
+    # UIA interactions always require human approval.
+    if action_name in {"uia_click", "uia_type"}:
+        return "risky"
+
+    # Respect model risk assessment conservatively.
     model_risk = str(
         action.get("risk_level", "")
     ).strip().lower()
@@ -159,7 +167,6 @@ def classify_risk(action: dict) -> str:
         return "risky"
 
     return "safe"
-
 
 def confirm_with_human(action: dict) -> bool:
     """Ask for explicit approval in terminal-based workflows."""

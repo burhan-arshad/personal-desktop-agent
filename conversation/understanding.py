@@ -128,8 +128,13 @@ def validate_understanding(data):
     }
 
     if set(data.keys()) != required_fields:
+        missing_fields = required_fields - set(data.keys())
+        unexpected_fields = set(data.keys()) - required_fields
+
         raise ValueError(
-            "Response contains missing or unexpected fields."
+            "Invalid response fields. "
+            f"Missing: {sorted(missing_fields)} | "
+            f"Unexpected: {sorted(unexpected_fields)}"
         )
 
     if data["type"] not in {

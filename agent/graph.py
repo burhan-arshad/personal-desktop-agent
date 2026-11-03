@@ -3,6 +3,7 @@ from uuid import uuid4
 from io import BytesIO
 from pathlib import Path
 import sys
+import time
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -10,7 +11,12 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 
-from perception.uia import prepare_taskbar_click
+from perception.uia import (
+    prepare_taskbar_click,
+    click_uia_element,
+    type_uia_text,
+    validate_active_window,
+)
 from PIL import Image
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
@@ -329,6 +335,7 @@ def skill_match_node(state: AgentState) -> dict:
         "human_approved": False,
     }
 
+
 def route_after_skill_match(state: AgentState):
     if state["skill_error"] or state["is_done"]:
         return END
@@ -340,6 +347,7 @@ def route_after_skill_match(state: AgentState):
         return "safety_check"
 
     return "capture"
+
 
 def capture_node(state: AgentState) -> dict:
     print("\n[CAPTURE] Taking a fresh screenshot...")
@@ -367,6 +375,7 @@ def route_after_capture(state: AgentState):
 
     print("[ROUTER] Vision mode detected. Routing to think.")
     return "think"
+
 
 def think_node(state: AgentState) -> dict:
     print("\n[THINK] Asking the Brain for the next action...")
@@ -675,6 +684,7 @@ def human_review_node(state: AgentState) -> dict:
         "is_done": True,
     }
 
+
 def route_after_human(state: AgentState):
     if state["human_approved"]:
         return "act"
@@ -752,11 +762,14 @@ def act_node(state: AgentState) -> dict:
             "Action cannot execute without approval."
         )
 
+    action_name = action["action"]
+
     print("\n[ACT] Executing the approved or safe action.")
-    print(f"Action: {action['action']}")
+    print(f"Action: {action_name}")
     print(f"Target: {action.get('target', '')}")
 
     try:
+        # Existing skill execution
         if state["execution_mode"] == "skill":
             skill_name = state["skill_name"]
             skill = SKILL_REGISTRY.get(skill_name)
@@ -779,24 +792,106 @@ def act_node(state: AgentState) -> dict:
                 "is_done": True,
             }
 
-        if not state["current_image"]:
-            raise RuntimeError(
-                "Vision action requires a screenshot."
+        # UIA element click
+        elif action.get("action") == "uia_click":
+
+            expected_window = (
+                action.get("expected_window")
+                or action.get("window")
             )
 
-        current_image = Image.open(
-            BytesIO(state["current_image"])
-        ).convert("RGB")
+            if not expected_window:
+                result = {
+                    "success": False,
+                    "message": (
+                        "UIA click rejected: "
+                        "expected window metadata is missing."
+                    )
+                }
 
-        execute_action(
-            action,
-            current_image,
-            confirm=True,
-        )
+            else:
+                validation = validate_active_window(expected_window)
+
+                if not validation["success"]:
+                    result = {
+                        "success": False,
+                        "message": validation["reason"],
+                        "window_validation": validation
+                    }
+
+                else:
+                    result = click_uia_element(
+                        name=action.get("target"),
+                        control_type=action.get("control_type"),
+                        automation_id=action.get("automation_id"),
+                        expected_window=expected_window
+                    )
+        # UIA text entry
+        elif action.get("action") == "uia_type":
+
+            expected_window = (
+                action.get("expected_window")
+                or action.get("window")
+            )
+
+            if not expected_window:
+                result = {
+                    "success": False,
+                    "message": (
+                        "UIA typing rejected: "
+                        "expected window metadata is missing."
+                    )
+                }
+
+            else:
+                validation = validate_active_window(expected_window)
+
+                if not validation["success"]:
+                    result = {
+                        "success": False,
+                        "message": validation["reason"],
+                        "window_validation": validation
+                    }
+
+                else:
+                    result = type_uia_text(
+                        text=action.get("text", ""),
+                        name=action.get("target"),
+                        automation_id=action.get("automation_id"),
+                        expected_window=expected_window
+                    )
+        # Existing vision-based execution
+        else:
+
+            if not state["current_image"]:
+                raise RuntimeError(
+                    "Vision action requires a screenshot."
+                )
+
+            current_image = Image.open(
+                BytesIO(state["current_image"])
+            ).convert("RGB")
+
+            execute_action(
+                action,
+                current_image,
+                confirm=True,
+            )
 
     except Exception as error:
         record_action_failure(state, error)
         raise
+
+    # Allow taskbar-launched applications time to open.
+    if (
+        state["execution_mode"] == "uia"
+        and action_name == "click"
+        and action.get("screen_coordinates")
+    ):
+        print(
+            "\n[ACT] Waiting 6 seconds for the application to launch..."
+        )
+        time.sleep(6)
 
     return {
         "pre_action_image": state["current_image"],
@@ -806,7 +901,6 @@ def act_node(state: AgentState) -> dict:
         ),
         "step_count": state["step_count"] + 1,
     }
-
 
 def verify_node(state: AgentState) -> dict:
     print("\n[VERIFY] Comparing before and after screenshots...")
