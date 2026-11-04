@@ -389,8 +389,7 @@ def think_node(state: AgentState) -> dict:
         or instruction.startswith("click on ")
     )
 
-    # If a click was already executed for a simple click task,
-    # stop rather than asking the vision model for another click.
+    # Stop after one click for simple click tasks.
     if (
         is_simple_click_task
         and state["step_count"] >= 1
@@ -426,11 +425,63 @@ def think_node(state: AgentState) -> dict:
 
         history_summary = summarize_recent(state["history"])
 
+        # ==========================================
+        # LOAD USER PREFERENCES
+        # ==========================================
+
+        try:
+            from memory.memory import (
+                init_db,
+                get_all_preferences,
+            )
+
+            conn = init_db()
+
+            try:
+                preferences = get_all_preferences(conn)
+            finally:
+                conn.close()
+
+            if preferences:
+                preferences_text = "\n".join(
+                    f"- {key}: {value}"
+                    for key, value in preferences.items()
+                )
+
+                history_summary += (
+                    "\n\nUser preferences (context only):\n"
+                    f"{preferences_text}\n"
+                    "Consider these preferences when choosing "
+                    "applications, folders, and other targets. "
+                    "These preferences do not grant permission "
+                    "for risky actions or override safety rules."
+                )
+
+                print("\n[PREFERENCES] Loaded user preferences:")
+                print(preferences_text)
+
+            else:
+                print("\n[PREFERENCES] No saved preferences found.")
+
+        except Exception as preference_error:
+            print(
+                "\n[PREFERENCES WARNING] "
+                f"Could not load preferences: {preference_error}"
+            )
+
+        # ==========================================
+        # VERIFICATION FEEDBACK
+        # ==========================================
+
         if state["verification_feedback"]:
             history_summary += (
                 "\n\nLatest visual verification feedback: "
                 f"{state['verification_feedback']}"
             )
+
+        # ==========================================
+        # BRAIN DECISION
+        # ==========================================
 
         action = decide_action(
             state["instruction"],
@@ -480,6 +531,10 @@ def think_node(state: AgentState) -> dict:
 
     print(f"Proposed action: {action}")
 
+    # ==========================================
+    # WAIT ACTION
+    # ==========================================
+
     if action.get("action") == "wait":
         reason = action.get(
             "reason",
@@ -504,6 +559,10 @@ def think_node(state: AgentState) -> dict:
             ),
         }
 
+    # ==========================================
+    # DONE ACTION
+    # ==========================================
+
     if action.get("action") == "done":
         reason = action.get(
             "reason",
@@ -525,6 +584,10 @@ def think_node(state: AgentState) -> dict:
             "verification_feedback": "",
         }
 
+    # ==========================================
+    # NORMAL ACTION
+    # ==========================================
+
     history_entry = {
         **action,
         "result": "proposed",
@@ -537,7 +600,6 @@ def think_node(state: AgentState) -> dict:
         "human_approved": False,
         "verification_feedback": "",
     }
-
 
 def should_continue(state: AgentState):
 

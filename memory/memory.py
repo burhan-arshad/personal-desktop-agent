@@ -1,4 +1,3 @@
-
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,18 +14,22 @@ SESSION_STATUSES = {
     "error",
 }
 
+
 def current_timestamp():
     return datetime.now(timezone.utc).isoformat()
 
+
 def init_db(db_path=None):
-    path=Path(db_path) if db_path else DEFAULT_DB_PATH
+    path = Path(db_path) if db_path else DEFAULT_DB_PATH
+
     if not path.is_absolute():
-        path=PROJECT_ROOT/path
+        path = PROJECT_ROOT / path
 
     path.parent.mkdir(exist_ok=True, parents=True)
 
-    conn=sqlite3.connect(path,timeout=10)
+    conn = sqlite3.connect(path, timeout=10)
     conn.execute("PRAGMA foreign_keys = ON")
+
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS sessions (
             session_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,7 +47,7 @@ def init_db(db_path=None):
                 )
         );
 
-                CREATE TABLE IF NOT EXISTS steps (
+        CREATE TABLE IF NOT EXISTS steps (
             step_id INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id INTEGER NOT NULL,
             step_number INTEGER NOT NULL,
@@ -73,6 +76,12 @@ def init_db(db_path=None):
                 ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS preferences (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_steps_session
             ON steps(session_id);
 
@@ -83,7 +92,8 @@ def init_db(db_path=None):
     conn.commit()
     return conn
 
-def start_session(conn, instruction:str)->int:
+
+def start_session(conn, instruction: str) -> int:
     cursor = conn.execute(
         """
         INSERT INTO sessions (
@@ -95,8 +105,10 @@ def start_session(conn, instruction:str)->int:
         """,
         (instruction, current_timestamp(), "running"),
     )
+
     conn.commit()
     return cursor.lastrowid
+
 
 def end_session(conn, session_id: int, status: str):
     if status not in SESSION_STATUSES - {"running"}:
@@ -116,6 +128,7 @@ def end_session(conn, session_id: int, status: str):
 
     conn.commit()
 
+
 def log_step(
     conn,
     session_id: int,
@@ -125,6 +138,7 @@ def log_step(
     screenshot_bytes: bytes = None,
     failed: bool = False,
 ) -> int:
+
     if risk_level not in {"safe", "risky", "blocked"}:
         raise ValueError(f"Invalid risk level: {risk_level}")
 
@@ -140,10 +154,14 @@ def log_step(
         screenshot_file = (
             f"session_{session_id}_step_{step_number}.png"
         )
+
         destination = SCREENSHOT_DIR / screenshot_file
 
         destination.write_bytes(screenshot_bytes)
-        screenshot_path = str(destination.relative_to(PROJECT_ROOT))
+
+        screenshot_path = str(
+            destination.relative_to(PROJECT_ROOT)
+        )
 
     cursor = conn.execute(
         """
@@ -172,13 +190,16 @@ def log_step(
     conn.commit()
     return cursor.lastrowid
 
+
 def log_confirmation(conn, step_id: int, user_response: str):
     response = str(user_response).strip().lower()
 
     if response in {"yes", "y", "approved"}:
         response = "yes"
+
     elif response in {"no", "n", "denied"}:
         response = "no"
+
     else:
         raise ValueError("Confirmation must be yes or no.")
 
@@ -195,6 +216,7 @@ def log_confirmation(conn, step_id: int, user_response: str):
     )
 
     conn.commit()
+
 
 def get_most_denied_actions(conn, limit=5):
     if not isinstance(limit, int) or limit < 1:
@@ -226,3 +248,107 @@ def get_session_success_rate(conn):
         ORDER BY status
         """
     ).fetchall()
+
+
+# ==========================================
+# PERSONALIZATION - USER PREFERENCES
+# ==========================================
+
+def set_preference(conn, key: str, value: str):
+    if not isinstance(key, str) or not isinstance(value, str):
+        raise TypeError("Preference key and value must be strings.")
+
+    key = key.strip().lower()
+    value = value.strip()
+
+    if not key or not value:
+        raise ValueError(
+            "Preference key and value cannot be empty."
+        )
+
+    conn.execute(
+        """
+        INSERT INTO preferences (
+            key,
+            value,
+            updated_at
+        )
+        VALUES (?, ?, ?)
+
+        ON CONFLICT(key)
+        DO UPDATE SET
+            value = excluded.value,
+            updated_at = excluded.updated_at
+        """,
+        (key, value, current_timestamp()),
+    )
+
+    conn.commit()
+
+
+def get_preference(conn, key: str):
+    if not isinstance(key, str):
+        raise TypeError("Preference key must be a string.")
+
+    key = key.strip().lower()
+
+    if not key:
+        raise ValueError("Preference key cannot be empty.")
+
+    row = conn.execute(
+        """
+        SELECT value
+        FROM preferences
+        WHERE key = ?
+        """,
+        (key,),
+    ).fetchone()
+
+    return row[0] if row else None
+
+
+def get_all_preferences(conn):
+    rows = conn.execute(
+        """
+        SELECT key, value
+        FROM preferences
+        ORDER BY key
+        """
+    ).fetchall()
+
+    return dict(rows)
+
+
+def delete_preference(conn, key: str):
+    if not isinstance(key, str):
+        raise TypeError("Preference key must be a string.")
+
+    key = key.strip().lower()
+
+    if not key:
+        raise ValueError("Preference key cannot be empty.")
+
+    cursor = conn.execute(
+        """
+        DELETE FROM preferences
+        WHERE key = ?
+        """,
+        (key,),
+    )
+
+    conn.commit()
+    return cursor.rowcount > 0
+
+def show_preferences(conn):
+    preferences = get_all_preferences(conn)
+
+    if not preferences:
+        print("\nNo preferences saved yet.")
+        return
+
+    print("\n========== USER PREFERENCES ==========")
+
+    for key, value in preferences.items():
+        print(f"{key}: {value}")
+
+    print("======================================")
