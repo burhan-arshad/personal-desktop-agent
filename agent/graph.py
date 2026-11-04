@@ -1233,6 +1233,7 @@ def run_agent(instruction: str):
         elif final_state.get("step_count", 0) >= MAX_STEPS:
             final_status = "max_steps_reached"
             display_status = "max_steps_reached"
+
         elif (
             final_state.get("human_approved") is False
             and final_state.get("history")
@@ -1285,9 +1286,19 @@ def run_agent(instruction: str):
         finally:
             conn.close()
 
-if __name__ == "__main__":
+    # Return execution result to the conversation loop.
+    return {
+        "status": display_status,
+        "final_status": final_status,
+        "session_id": session_id,
+        "verification_feedback": final_state.get(
+            "verification_feedback"
+        ),
+        "api_error": final_state.get("api_error"),
+        "skill_error": final_state.get("skill_error"),
+    }
 
-    import json
+if __name__ == "__main__":
 
     from conversation.understanding import understand_message
     from conversation.memory import (
@@ -1344,6 +1355,7 @@ if __name__ == "__main__":
             print("\nConversation paused.")
             break
 
+        # Retrieve previous conversation before saving new message.
         history = get_recent_history(
             conversation_id,
             limit=8
@@ -1357,39 +1369,53 @@ if __name__ == "__main__":
 
         try:
 
-            result = understand_message(
+            understanding = understand_message(
                 user_message=user_message,
                 history=history
             )
 
-            save_message(
-                conversation_id,
-                "assistant",
-                json.dumps(result, ensure_ascii=False)
-            )
+            if understanding["type"] == "conversation":
 
-            if result["type"] == "conversation":
-                response = result["response"]
+                response = understanding["response"]
 
                 print(f"\nAssistant: {response}")
                 speak(response)
 
+                save_message(
+                    conversation_id,
+                    "assistant",
+                    response
+                )
+
                 continue
 
-            elif result["type"] == "clarification":
-                question = result["clarification_question"]
+            elif understanding["type"] == "clarification":
+
+                question = understanding["clarification_question"]
 
                 print(f"\nAssistant: {question}")
                 speak(question)
 
+                save_message(
+                    conversation_id,
+                    "assistant",
+                    question
+                )
+
                 continue
 
-            elif result["type"] == "action":
+            elif understanding["type"] == "action":
 
-                task = result["instruction"]
+                task = understanding["instruction"]
 
                 print(f"\n[UNDERSTOOD TASK] {task}")
-                speak(f"I understood your request. {task}. Should I perform this action?")
+
+                confirmation_message = (
+                    f"I understood your request. {task}. "
+                    "Should I perform this action?"
+                )
+
+                speak(confirmation_message)
 
                 confirmation = input(
                     "\nShould I perform this action? (yes/no): "
@@ -1397,12 +1423,75 @@ if __name__ == "__main__":
 
                 if confirmation in ["yes", "y"]:
 
-                    run_agent(task)
+                    execution_result = run_agent(task)
+
+                    status = execution_result.get(
+                        "status",
+                        "error"
+                    )
+
+                    if status == "completed":
+                        message = "Task completed successfully."
+
+                    elif status == "denied":
+                        message = "The action was not performed."
+
+                    elif status == "blocked":
+                        message = (
+                            "This action was blocked "
+                            "for safety reasons."
+                        )
+
+                    elif status == "verification_failed":
+                        message = (
+                            "I performed the action, "
+                            "but could not verify the result."
+                        )
+
+                    elif status == "api_rate_limited":
+                        message = (
+                            "The AI service is temporarily unavailable. "
+                            "Please try again later."
+                        )
+
+                    elif status == "max_steps_reached":
+                        message = (
+                            "I reached the maximum number of steps "
+                            "before completing the task."
+                        )
+
+                    else:
+                        message = "Sorry, the task could not be completed."
 
                 else:
 
-                    print("\nAction cancelled by user.")
+                    message = "Okay. I have cancelled the action."
+
+                print(f"\nAssistant: {message}")
+                speak(message)
+
+                # Save the actual assistant response, not JSON.
+                save_message(
+                    conversation_id,
+                    "assistant",
+                    message
+                )
 
         except Exception as error:
 
             print(f"\n[CONVERSATION ERROR] {error}")
+
+            error_message = (
+                "Sorry, something went wrong while processing "
+                "your request."
+            )
+
+            speak(error_message)
+
+            save_message(
+                conversation_id,
+                "assistant",
+                error_message
+            )
+
+
