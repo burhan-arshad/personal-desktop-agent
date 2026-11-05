@@ -1,3 +1,4 @@
+
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +19,10 @@ SESSION_STATUSES = {
 def current_timestamp():
     return datetime.now(timezone.utc).isoformat()
 
+
+# ==========================================
+# DATABASE INITIALIZATION
+# ==========================================
 
 def init_db(db_path=None):
     path = Path(db_path) if db_path else DEFAULT_DB_PATH
@@ -82,16 +87,45 @@ def init_db(db_path=None):
             updated_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS scheduled_tasks (
+            task_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            instruction TEXT NOT NULL,
+            schedule_time TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1
+                CHECK (enabled IN (0, 1)),
+            last_run TEXT,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS scheduled_events (
+            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER,
+            session_id INTEGER,
+            event_type TEXT NOT NULL,
+            message TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_steps_session
             ON steps(session_id);
 
         CREATE INDEX IF NOT EXISTS idx_confirmations_step
             ON confirmations(step_id);
+
+        CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_enabled
+            ON scheduled_tasks(enabled);
+
+        CREATE INDEX IF NOT EXISTS idx_scheduled_events_task
+            ON scheduled_events(task_id);
     """)
 
     conn.commit()
     return conn
 
+
+# ==========================================
+# SESSION MANAGEMENT
+# ==========================================
 
 def start_session(conn, instruction: str) -> int:
     cursor = conn.execute(
@@ -129,6 +163,10 @@ def end_session(conn, session_id: int, status: str):
     conn.commit()
 
 
+# ==========================================
+# STEP LOGGING
+# ==========================================
+
 def log_step(
     conn,
     session_id: int,
@@ -156,7 +194,6 @@ def log_step(
         )
 
         destination = SCREENSHOT_DIR / screenshot_file
-
         destination.write_bytes(screenshot_bytes)
 
         screenshot_path = str(
@@ -191,6 +228,10 @@ def log_step(
     return cursor.lastrowid
 
 
+# ==========================================
+# HUMAN CONFIRMATIONS
+# ==========================================
+
 def log_confirmation(conn, step_id: int, user_response: str):
     response = str(user_response).strip().lower()
 
@@ -217,6 +258,10 @@ def log_confirmation(conn, step_id: int, user_response: str):
 
     conn.commit()
 
+
+# ==========================================
+# ANALYTICS
+# ==========================================
 
 def get_most_denied_actions(conn, limit=5):
     if not isinstance(limit, int) or limit < 1:
@@ -339,6 +384,7 @@ def delete_preference(conn, key: str):
     conn.commit()
     return cursor.rowcount > 0
 
+
 def show_preferences(conn):
     preferences = get_all_preferences(conn)
 
@@ -352,3 +398,156 @@ def show_preferences(conn):
         print(f"{key}: {value}")
 
     print("======================================")
+
+
+# ==========================================
+# PHASE 8 - SCHEDULING
+# ==========================================
+
+def add_scheduled_task(
+    conn,
+    instruction: str,
+    schedule_time: str,
+) -> int:
+
+    if not isinstance(instruction, str):
+        raise TypeError("Instruction must be a string.")
+
+    if not isinstance(schedule_time, str):
+        raise TypeError("Schedule time must be a string.")
+
+    instruction = instruction.strip()
+    schedule_time = schedule_time.strip()
+
+    if not instruction or not schedule_time:
+        raise ValueError(
+            "Instruction and schedule time cannot be empty."
+        )
+
+    cursor = conn.execute(
+        """
+        INSERT INTO scheduled_tasks (
+            instruction,
+            schedule_time,
+            enabled,
+            created_at
+        )
+        VALUES (?, ?, 1, ?)
+        """,
+        (
+            instruction,
+            schedule_time,
+            current_timestamp(),
+        ),
+    )
+
+    conn.commit()
+    return cursor.lastrowid
+
+
+def get_scheduled_tasks(conn, enabled_only=True):
+    query = """
+        SELECT
+            task_id,
+            instruction,
+            schedule_time,
+            enabled,
+            last_run
+        FROM scheduled_tasks
+    """
+
+    if enabled_only:
+        query += " WHERE enabled = 1"
+
+    query += " ORDER BY task_id"
+
+    return conn.execute(query).fetchall()
+
+
+def update_scheduled_task_run(conn, task_id: int):
+    cursor = conn.execute(
+        """
+        UPDATE scheduled_tasks
+        SET last_run = ?
+        WHERE task_id = ?
+        """,
+        (current_timestamp(), task_id),
+    )
+
+    conn.commit()
+
+    if cursor.rowcount == 0:
+        raise ValueError(
+            f"Scheduled task not found: {task_id}"
+        )
+
+
+def disable_scheduled_task(conn, task_id: int) -> bool:
+    cursor = conn.execute(
+        """
+        UPDATE scheduled_tasks
+        SET enabled = 0
+        WHERE task_id = ?
+        """,
+        (task_id,),
+    )
+
+    conn.commit()
+    return cursor.rowcount > 0
+
+
+def log_scheduled_event(
+    conn,
+    task_id: int,
+    session_id: int,
+    event_type: str,
+    message: str,
+):
+    cursor = conn.execute(
+        """
+        INSERT INTO scheduled_events (
+            task_id,
+            session_id,
+            event_type,
+            message,
+            created_at
+        )
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            task_id,
+            session_id,
+            event_type,
+            message,
+            current_timestamp(),
+        ),
+    )
+
+    conn.commit()
+    return cursor.lastrowid
+
+
+def get_scheduled_events(conn, task_id=None):
+    query = """
+        SELECT
+            event_id,
+            task_id,
+            session_id,
+            event_type,
+            message,
+            created_at
+        FROM scheduled_events
+    """
+
+    if task_id is not None:
+        query += " WHERE task_id = ?"
+        query += " ORDER BY event_id DESC"
+
+        return conn.execute(
+            query,
+            (task_id,),
+        ).fetchall()
+
+    query += " ORDER BY event_id DESC"
+
+    return conn.execute(query).fetchall()

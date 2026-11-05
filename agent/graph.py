@@ -144,6 +144,9 @@ class AgentState(TypedDict):
     verification_feedback: str
     last_verification: dict
     api_error: str
+    is_scheduled: bool
+    scheduled_task_id: int
+    scheduled_abort_reason: str
 
 
 def summarize_recent(history):
@@ -339,6 +342,10 @@ def skill_match_node(state: AgentState) -> dict:
 def route_after_skill_match(state: AgentState):
     if state["skill_error"] or state["is_done"]:
         return END
+
+    if state.get("is_scheduled", False):
+        if state["execution_mode"] == "uia":
+            return "safety_check"
 
     if state["execution_mode"] == "uia":
         return "capture"
@@ -687,8 +694,70 @@ def safety_check_node(state: AgentState) -> dict:
         "human_approved": False,
     }
 
+def abort_and_log_node(state: AgentState) -> dict:
+    risk = state["risk_level"]
+    action = state["last_action"]
+
+    message = (
+        f"Scheduled task aborted. "
+        f"Risk level: {risk}. "
+        f"Action: {action}"
+    )
+
+    print("\n[SCHEDULER] TASK ABORTED")
+    print(f"[SCHEDULER] Risk: {risk.upper()}")
+    print(f"[SCHEDULER] Reason: {message}")
+
+    from memory.memory import log_scheduled_event
+
+    conn = init_db()
+
+    try:
+        log_scheduled_event(
+            conn=conn,
+            task_id=state["scheduled_task_id"],
+            session_id=state["session_id"],
+            event_type=f"aborted_{risk}",
+            message=message,
+        )
+    finally:
+        conn.close()
+
+    log_decision(
+        action,
+        risk,
+        "scheduled_task_aborted",
+    )
+
+    return {
+        "is_done": True,
+        "human_approved": False,
+        "scheduled_abort_reason": message,
+        "history": update_latest_history(
+            state,
+            f"scheduled task aborted: {risk}",
+        ),
+    }
+
+def route_after_safety_scheduled(state: AgentState):
+    risk = state["risk_level"]
+
+    if risk != "safe":
+        print(
+            f"[SCHEDULER SAFETY] {risk.upper()} action detected. "
+            "Aborting scheduled task."
+        )
+        return "abort_and_log"
+
+    return "act"
+
 
 def route_after_safety(state: AgentState):
+    # Scheduled tasks never enter human review.
+    if state.get("is_scheduled", False):
+        return route_after_safety_scheduled(state)
+
+    # Existing interactive behavior.
     if state["risk_level"] == "blocked":
         return END
 
@@ -696,7 +765,6 @@ def route_after_safety(state: AgentState):
         return "human_review"
 
     return "act"
-
 
 def human_review_node(state: AgentState) -> dict:
     action = state["last_action"]
@@ -1100,6 +1168,7 @@ graph.add_node("safety_check", safety_check_node)
 graph.add_node("human_review", human_review_node)
 graph.add_node("act", act_node)
 graph.add_node("verify", verify_node)
+graph.add_node("abort_and_log", abort_and_log_node)
 
 graph.add_edge(START, "skill_match")
 
@@ -1139,9 +1208,12 @@ graph.add_conditional_edges(
     {
         "act": "act",
         "human_review": "human_review",
+        "abort_and_log": "abort_and_log",
         END: END,
     },
 )
+
+graph.add_edge("abort_and_log", END)
 
 graph.add_conditional_edges(
     "human_review",
@@ -1203,6 +1275,9 @@ def run_agent(instruction: str):
             "verification_feedback": "",
             "last_verification": {},
             "api_error": "",
+            "is_scheduled": False,
+            "scheduled_task_id": 0,
+            "scheduled_abort_reason": "",
         }
 
         config = {
@@ -1359,6 +1434,137 @@ def run_agent(instruction: str):
         "api_error": final_state.get("api_error"),
         "skill_error": final_state.get("skill_error"),
     }
+
+
+def run_scheduled_agent(instruction: str, task_id: int):
+    conn = init_db()
+    session_id = None
+    final_status = "error"
+
+    try:
+        session_id = start_session(conn, instruction)
+
+        initial_state: AgentState = {
+            "instruction": instruction,
+            "current_image": b"",
+            "pre_action_image": b"",
+            "last_action": {},
+            "history": [],
+            "step_count": 0,
+            "is_done": False,
+            "risk_level": "",
+            "human_approved": False,
+            "session_id": session_id,
+            "current_step_id": 0,
+            "skill_name": "",
+            "skill_payload": {},
+            "execution_mode": "vision",
+            "skill_error": "",
+            "unchanged_count": 0,
+            "verification_feedback": "",
+            "last_verification": {},
+            "api_error": "",
+            "is_scheduled": True,
+            "scheduled_task_id": task_id,
+            "scheduled_abort_reason": "",
+        }
+
+        config = {
+            "configurable": {
+                "thread_id": f"scheduled-{task_id}-{uuid4()}",
+            }
+        }
+
+        print("\n[SCHEDULER] Starting unattended task.")
+        print(f"[SCHEDULER] Task ID: {task_id}")
+        print(f"[SCHEDULER] Instruction: {instruction}")
+
+        final_state = app.invoke(
+            initial_state,
+            config=config,
+        )
+
+        # Fail closed if an interrupt is unexpectedly produced.
+        if final_state.get("__interrupt__"):
+            from memory.memory import log_scheduled_event
+
+            log_scheduled_event(
+                conn,
+                task_id,
+                session_id,
+                "unexpected_interrupt",
+                "Unexpected human-review interrupt in scheduled mode.",
+            )
+            final_status = "error"
+
+            return {
+                "status": "error",
+                "session_id": session_id,
+            }
+
+        if (
+            final_state.get("risk_level") in {"risky", "blocked"}
+            or final_state.get("scheduled_abort_reason")
+        ):
+            final_status = "error"
+            display_status = "aborted"
+
+        elif final_state.get("api_error"):
+            final_status = "error"
+            display_status = "api_error"
+
+        elif final_state.get("skill_error"):
+            final_status = "error"
+            display_status = "error"
+
+        elif final_state.get("is_done"):
+            final_status = "completed"
+            display_status = "completed"
+
+        else:
+            final_status = "error"
+            display_status = "error"
+
+        print(f"\n[SCHEDULER] Result: {display_status}")
+
+        return {
+            "status": display_status,
+            "session_id": session_id,
+            "task_id": task_id,
+            "abort_reason": final_state.get(
+                "scheduled_abort_reason", ""
+            ),
+        }
+
+    except Exception as error:
+        final_status = "error"
+        print(f"\n[SCHEDULER ERROR] {error}")
+
+        from memory.memory import log_scheduled_event
+
+        if session_id is not None:
+            log_scheduled_event(
+                conn,
+                task_id,
+                session_id,
+                "execution_error",
+                str(error),
+            )
+
+        return {
+            "status": "error",
+            "session_id": session_id,
+            "task_id": task_id,
+            "error": str(error),
+        }
+
+    finally:
+        try:
+            if session_id is not None:
+                end_session(conn, session_id, final_status)
+        finally:
+            conn.close()
+
 
 if __name__ == "__main__":
 
