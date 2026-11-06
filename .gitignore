@@ -87,3 +87,4 @@ test_uia_execution.py
 test_uia_window_guard.py
 test_taskbar.py
 setup_preferences.py
+.asr_venv
