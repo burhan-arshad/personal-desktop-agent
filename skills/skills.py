@@ -159,21 +159,32 @@ def prepare_send_whatsapp_message(instruction):
     }
 
 def send_whatsapp_message(payload):
-    try:
-        import pywhatkit
-    except ImportError as error:
-        raise RuntimeError(
-            "pywhatkit is not installed. Run: "
-            "python -m pip install pywhatkit"
-        ) from error
+    phone = re.sub(r"\D", "", payload["phone"])
+    message = payload["message"].strip()
 
-    pywhatkit.sendwhatmsg_instantly(
-        phone_no=payload["phone"],
-        message=payload["message"],
-        wait_time=20,
-        tab_close=False
+    if not phone or not (10 <= len(phone) <= 15):
+        raise ValueError("Invalid international phone number.")
+
+    if not message:
+        raise ValueError("WhatsApp message cannot be empty.")
+
+    url = (
+        "https://web.whatsapp.com/send"
+        f"?phone={phone}"
+        f"&text={quote_plus(message)}"
     )
-    return "Whatsapp Message request send"
+
+    opened = webbrowser.open(url, new=2)
+
+    if not opened:
+        raise RuntimeError(
+            "Could not open WhatsApp Web in the browser."
+        )
+
+    return (
+        f"WhatsApp Web draft opened for +{phone}. "
+        "Message has NOT been sent."
+    )
 
 def prepare_open_file_explorer(instruction):
     text = instruction.strip()
