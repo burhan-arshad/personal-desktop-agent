@@ -736,13 +736,13 @@ def classify_skill(instruction):
 
     app_pattern = (
         r"(?:open|launch|start|run)\s+"
+        r"(?:the\s+)?"
         r"(notepad|calculator|calc|paint|command prompt|cmd|"
         r"powershell|task manager)"
+        r"(?:\s+(?:application|app))?"
     )
 
-    app_match = re.fullmatch(app_pattern, task)
-
-    if app_match:
+    if re.fullmatch(app_pattern, task):
         return "open_app"
 
     if re.fullmatch(
@@ -752,13 +752,13 @@ def classify_skill(instruction):
         return "take_screenshot"
 
     if re.fullmatch(
-        r"(?:open|launch)\s+(?:file explorer|windows explorer|explorer)",
+        r"(?:open|launch)\s+(?:the\s+)?"
+        r"(?:file explorer|windows explorer|explorer)",
         task,
     ):
         return "open_file_explorer"
 
     return None
-
 
 if __name__ == "__main__":
 

@@ -66,27 +66,44 @@ def prepare_open_app(instruction):
     app_name = _remove_prefix(
         instruction,
         [
+            "please open the application",
             "please open the app",
-            "please open",
+            "please launch the application",
+            "please launch the app",
+            "open the application",
             "open the app",
-            "open app",
+            "launch the application",
             "launch the app",
-            "launch",
+            "start the application",
+            "start the app",
+            "run the application",
+            "run the app",
+            "please open",
+            "please launch",
+            "open the",
+            "launch the",
+            "start the",
+            "run the",
             "app kholo",
             "application kholo",
             "kholo",
             "open",
+            "launch",
+            "start",
+            "run",
         ],
     )
 
-    # Normalize application name
     app_name = app_name.lower().strip()
-
-    # Remove trailing punctuation
     app_name = re.sub(r"[.,!?;:]+$", "", app_name)
-
-    # Normalize multiple spaces
     app_name = re.sub(r"\s+", " ", app_name).strip()
+
+    # Remove optional application suffix.
+    app_name = re.sub(
+        r"\s+(?:application|app)$",
+        "",
+        app_name,
+    ).strip()
 
     if app_name not in APP_ALIASES:
         raise ValueError(
@@ -339,6 +356,13 @@ def match_skill(instruction):
             "launch the app",
             "open notepad",
             "open calculator",
+            "open the calculator",
+            "launch calculator",
+            "launch the calculator",
+            "start calculator",
+            "start the calculator",
+            "run calculator",
+            "run the calculator",
             "open paint",
             "open powershell",
             "open command prompt",

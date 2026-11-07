@@ -21,7 +21,7 @@ from PIL import Image
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import interrupt, Command
-from voice.voice import listen
+from voice.voice import listen, get_model
 from voice.speech import speak
 
 from perception.perception import capture_grid
@@ -1584,14 +1584,24 @@ def run_scheduled_agent(instruction: str, task_id: int):
             conn.close()
 
 
-if __name__ == "__main__":
-
+def run_cli():
     from conversation.understanding import understand_message
     from conversation.memory import (
         get_active_conversation,
         get_recent_history,
         save_message,
     )
+
+    # Preload local Whisper model during assistant startup.
+    print("\n[STARTUP] Initializing Whisper model...")
+
+    try:
+        get_model()
+        print("[STARTUP] Whisper is ready.")
+
+    except Exception as error:
+        print(f"[STARTUP WARNING] Whisper could not load: {error}")
+        print("[STARTUP] Text mode is still available.")
 
     conversation_id = get_active_conversation()
 
@@ -1781,3 +1791,7 @@ if __name__ == "__main__":
             )
 
 
+
+
+if __name__ == "__main__":
+    run_cli()
