@@ -30,3 +30,11 @@ pygame-ce>=2.5.8
 # ---- Phase 8: Scheduling ----
 schedule
 pywinauto
+
+
+# ---- For Frontend ----
+fastapi
+uvicorn[standard]
+python-multipart
+httpx
+groq

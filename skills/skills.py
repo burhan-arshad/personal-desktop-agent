@@ -63,24 +63,36 @@ def _remove_prefix(text, prefixes):
     return result.strip(" \t\r\n\"'")
 
 def prepare_open_app(instruction):
-    app_name=_remove_prefix(
+    app_name = _remove_prefix(
         instruction,
         [
-                    "please open the app",
-                    "please open",
-                    "open the app",
-                    "open app",
-                    "launch the app",
-                    "launch",
-                    "app kholo",
-                    "application kholo",
-                    "kholo",
-                    "open",
-                ],
-    ).lower()
+            "please open the app",
+            "please open",
+            "open the app",
+            "open app",
+            "launch the app",
+            "launch",
+            "app kholo",
+            "application kholo",
+            "kholo",
+            "open",
+        ],
+    )
+
+    # Normalize application name
+    app_name = app_name.lower().strip()
+
+    # Remove trailing punctuation
+    app_name = re.sub(r"[.,!?;:]+$", "", app_name)
+
+    # Normalize multiple spaces
+    app_name = re.sub(r"\s+", " ", app_name).strip()
 
     if app_name not in APP_ALIASES:
-        raise ValueError(f"{app_name} is not Supported Currently, While" + ", ".join(APP_ALIASES))
+        raise ValueError(
+            f"{app_name} is not supported currently. "
+            f"Supported apps: {', '.join(APP_ALIASES)}"
+        )
 
     return {"app_name": app_name}
 
@@ -124,6 +136,7 @@ def search_web(payload):
 
     return f"Opened browser search for: {query}"
 
+
 def prepare_send_whatsapp_message(instruction):
     phone_match = re.search(
         r"(?<!\w)(\+\d{10,15})(?!\w)",
@@ -137,15 +150,15 @@ def prepare_send_whatsapp_message(instruction):
         )
 
     message_match = re.search(
-        r"\bmessage\s*:\s*(.+)$",
+        r"(?:\bmessage\s*:\s*|\bsaying\s+)(.+)$",
         instruction,
         flags=re.IGNORECASE | re.DOTALL,
     )
 
     if not message_match:
         raise ValueError(
-            'Add the message after "message:", '
-            'for example: message: Assalam o Alaikum'
+            'Add the message using "saying" or "message:", '
+            'for example: saying Assalam o Alaikum'
         )
 
     message = message_match.group(1).strip().strip("\"'")
@@ -157,6 +170,7 @@ def prepare_send_whatsapp_message(instruction):
         "phone": phone_match.group(1),
         "message": message,
     }
+
 
 def send_whatsapp_message(payload):
     phone = re.sub(r"\D", "", payload["phone"])

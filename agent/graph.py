@@ -36,8 +36,7 @@ from memory.memory import (
     log_step,
     log_confirmation,
 )
-from skills.skills import SKILL_REGISTRY
-
+from skills.skills import SKILL_REGISTRY, match_skill
 
 MAX_STEPS = 4
 MAX_UNCHANGED_ATTEMPTS = 1
@@ -244,7 +243,10 @@ def skill_match_node(state: AgentState) -> dict:
             }
 
     # Existing skill system remains unchanged in behavior.
-    skill_name = classify_skill(state["instruction"])
+    skill_name = (
+    classify_skill(state["instruction"])
+    or match_skill(state["instruction"])
+)
 
     if not skill_name:
         print("[SKILL MATCH] No skill matched. Using vision loop.")
@@ -382,6 +384,7 @@ def route_after_capture(state: AgentState):
 
     print("[ROUTER] Vision mode detected. Routing to think.")
     return "think"
+
 
 
 def think_node(state: AgentState) -> dict:
@@ -539,7 +542,7 @@ def think_node(state: AgentState) -> dict:
     print(f"Proposed action: {action}")
 
     # ==========================================
-    # WAIT ACTION
+    # WAIT ACTION - UPDATED
     # ==========================================
 
     if action.get("action") == "wait":
@@ -548,22 +551,36 @@ def think_node(state: AgentState) -> dict:
             "Waiting for the screen to become ready.",
         )
 
+        next_step_count = state["step_count"] + 1
+        should_stop = next_step_count >= MAX_STEPS
+
+        if should_stop:
+            reason = (
+                f"Maximum wait/attempt limit reached ({MAX_STEPS}). "
+                f"Stopping safely. Last reason: {reason}"
+            )
+
         print(f"\n[WAIT] {reason}")
 
         return {
-            "last_action": action,
+            "last_action": {
+                **action,
+                "reason": reason,
+            },
             "history": state["history"] + [
                 {
                     **action,
-                    "result": "waiting",
+                    "result": (
+                        "stopped; maximum attempts reached"
+                        if should_stop
+                        else "waiting"
+                    ),
                 }
             ],
-            "is_done": False,
+            "step_count": next_step_count,
+            "is_done": should_stop,
             "human_approved": False,
-            "verification_feedback": (
-                "The agent waited for the screen to become ready. "
-                "A fresh screenshot is required before the next decision."
-            ),
+            "verification_feedback": reason,
         }
 
     # ==========================================
@@ -607,6 +624,7 @@ def think_node(state: AgentState) -> dict:
         "human_approved": False,
         "verification_feedback": "",
     }
+
 
 def should_continue(state: AgentState):
 
