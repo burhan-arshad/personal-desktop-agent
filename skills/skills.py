@@ -119,40 +119,113 @@ def open_app(payload):
     return f"{payload["app_name"]} is Opened"
 
 def prepare_search_web(instruction):
-    query=_remove_prefix(
-        instruction,
-        [
-            "search the web for",
-            "search google for",
-            "google search for",
-            "search for",
-            "google",
-            "search",
-        ],
-    ).lower()
+    text = instruction.strip()
 
-    query = re.sub(
+    # Remove optional browser prefix.
+    text = re.sub(
         r"^\s*browser kholo\s*",
         "",
-        query,
+        text,
         flags=re.IGNORECASE,
     ).strip()
 
-    if not query:
-        raise ValueError("Please Specify What are you trying to seacrh")
+    destination = "google"
+    query = ""
 
-    return {"query":query}
+    # Format: Search YouTube for Python tutorials
+    # Format: Search Google for Python tutorials
+    match = re.match(
+        r"^\s*(?:please\s+)?search\s+(?:on\s+)?"
+        r"(youtube|google)\s+for\s+(.+?)\s*[.!?]*$",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    # Format: YouTube search for Python tutorials
+    # Format: Google search for Python tutorials
+    if not match:
+        match = re.match(
+            r"^\s*(youtube|google)\s+search\s+for\s+"
+            r"(.+?)\s*[.!?]*$",
+            text,
+            flags=re.IGNORECASE,
+        )
+
+    if match:
+        destination = match.group(1).lower()
+        query = match.group(2).strip()
+
+    else:
+        # Detect a destination at the end.
+        # Format: Search Python tutorials on YouTube
+        trailing_match = re.search(
+            r"\s+on\s+(youtube|google)\s*[.!?]*$",
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        if trailing_match:
+            destination = trailing_match.group(1).lower()
+            text = text[:trailing_match.start()].strip()
+
+        query = _remove_prefix(
+            text,
+            [
+                "please search the web for",
+                "search the web for",
+                "search google for",
+                "search youtube for",
+                "google search for",
+                "youtube search for",
+                "search for",
+                "please search",
+                "search",
+                "google",
+            ],
+        )
+
+    query = query.strip().strip("\"'").rstrip(".!?").strip()
+
+    if not query:
+        raise ValueError(
+            "Please specify what you are trying to search."
+        )
+
+    return {
+        "query": query,
+        "destination": destination,
+    }
+
 
 def search_web(payload):
-    query=payload["query"].strip()
+    query = payload["query"].strip()
+    destination = payload.get("destination", "google").lower()
+
     if not query:
-        raise ValueError("Query Cannot be empty")
+        raise ValueError("Query cannot be empty.")
 
-    url = "https://www.google.com/search?q=" + quote_plus(query)
-    webbrowser.open(url)
+    if destination == "youtube":
+        url = (
+            "https://www.youtube.com/results?search_query="
+            + quote_plus(query)
+        )
 
-    return f"Opened browser search for: {query}"
+    else:
+        url = (
+            "https://www.google.com/search?q="
+            + quote_plus(query)
+        )
 
+    opened = webbrowser.open(url, new=2)
+
+    if not opened:
+        raise RuntimeError(
+            "Could not open the browser search."
+        )
+
+    return (
+        f"Opened {destination.title()} search for: {query}"
+    )
 
 def prepare_send_whatsapp_message(instruction):
     phone_match = re.search(
@@ -342,6 +415,14 @@ def match_skill(instruction):
     # WhatsApp must always use WhatsApp Web, never the desktop app.
     if "whatsapp" in text:
         return "send_whatsapp_message"
+
+
+    if re.match(
+        r"^\s*(?:please\s+)?search\b.+\s+on\s+(?:youtube|google)\s*[.!?]*$",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        return "search_web"
     
     patterns = {
         "send_whatsapp_message": [
@@ -366,6 +447,10 @@ def match_skill(instruction):
             "search the web for",
             "search google for",
             "google search for",
+            "search youtube for",
+            "youtube search for",
+            "search on youtube for",
+            "search on google for",
             "search for",
         ],
         "open_app": [
