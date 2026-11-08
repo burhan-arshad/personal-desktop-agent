@@ -1342,3 +1342,161 @@ textarea:focus-visible {
     font-size: 8px;
     color: var(--muted);
 }
+
+/* =========================================
+   AETHRIX UI IMPROVEMENT — LAYOUT FIX
+========================================= */
+
+html,
+body {
+    width: 100%;
+    height: 100%;
+    min-height: 100%;
+}
+
+body {
+    overflow: hidden;
+}
+
+.app-shell {
+    width: 100%;
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.sidebar,
+.main-panel,
+.insight-panel {
+    min-height: 0;
+}
+
+.main-panel {
+    height: 100%;
+    overflow: hidden;
+}
+
+.chat-view {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.chat-content {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+}
+
+.welcome-screen {
+    padding-top: 15px;
+    padding-bottom: 25px;
+}
+
+.composer-area {
+    position: relative;
+    z-index: 5;
+    flex-shrink: 0;
+    width: 100%;
+    padding-top: 12px;
+    padding-bottom: max(15px, env(safe-area-inset-bottom));
+    background: var(--bg);
+}
+
+.composer-shell {
+    width: 100%;
+}
+
+.composer-shell textarea {
+    min-height: 43px;
+    max-height: 130px;
+    resize: none;
+    overflow-y: auto;
+}
+
+.messages-container {
+    padding-bottom: 20px;
+}
+
+/* Prevent welcome screen from covering composer */
+
+#chatView {
+    position: relative;
+}
+
+#welcomeScreen,
+#messagesContainer {
+    position: relative;
+    z-index: 1;
+}
+
+/* Better desktop viewport handling */
+
+@media (min-width: 761px) {
+    .app-shell {
+        grid-template-columns:
+            248px
+            minmax(0, 1fr)
+            290px;
+    }
+
+    .chat-content {
+        padding-top: 30px;
+    }
+}
+
+@media (max-width: 1150px) and (min-width: 761px) {
+    .app-shell {
+        grid-template-columns: 220px minmax(0, 1fr);
+    }
+}
+
+/* Mobile layout */
+
+@media (max-width: 760px) {
+    body {
+        overflow: hidden;
+    }
+
+    .app-shell {
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+        height: 100dvh;
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    .sidebar {
+        flex-shrink: 0;
+    }
+
+    .main-panel {
+        flex: 1;
+        min-height: 0;
+        height: auto;
+    }
+
+    .chat-view {
+        min-height: 0;
+        flex: 1;
+    }
+
+    .chat-content {
+        min-height: 0;
+        flex: 1;
+    }
+
+    .composer-area {
+        flex-shrink: 0;
+        padding: 10px 17px 15px;
+    }
+
+    .quick-actions {
+        grid-template-columns: 1fr;
+    }
+}

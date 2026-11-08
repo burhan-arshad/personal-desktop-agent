@@ -308,7 +308,10 @@ def respond_to_approval(thread_id: str, approved: bool) -> dict:
             raise ValueError("Agent run not found.")
 
         if run["status"] != "approval_required":
-            raise ValueError("This run is not awaiting approval.")
+            raise RuntimeError(
+                f"This run is not awaiting approval. "
+                f"Current status: {run['status']}"
+            )
 
         run["status"] = "running"
         run["approval_required"] = False
@@ -351,24 +354,40 @@ def get_run(thread_id: str) -> dict:
 
 def get_runtime_status() -> dict:
     with _registry_lock:
-        active_run = _runs.get(_active_thread_id) if _active_thread_id else None
+        active_run = (
+            _runs.get(_active_thread_id)
+            if _active_thread_id
+            else None
+        )
+
+        registered_runs = [
+            {
+                "thread_id": run["thread_id"],
+                "instruction": run["instruction"],
+                "status": run["status"],
+                "approval_required": run.get(
+                    "approval_required",
+                    False,
+                ),
+            }
+            for run in _runs.values()
+        ]
 
         return {
             "active_thread_id": _active_thread_id,
-            "active_run": {
-                "thread_id": active_run.get("thread_id"),
-                "instruction": active_run.get("instruction"),
-                "status": active_run.get("status"),
-                "approval_required": active_run.get("approval_required"),
-                "conversation_id": active_run.get("conversation_id"),
-            } if active_run else None,
-            "registered_runs": [
+            "active_run": (
                 {
-                    "thread_id": run.get("thread_id"),
-                    "instruction": run.get("instruction"),
-                    "status": run.get("status"),
-                    "approval_required": run.get("approval_required"),
+                    "thread_id": active_run["thread_id"],
+                    "instruction": active_run["instruction"],
+                    "status": active_run["status"],
+                    "approval_required": active_run.get(
+                        "approval_required",
+                        False,
+                    ),
                 }
-                for run in _runs.values()
-            ],
+                if active_run
+                else None
+            ),
+            "registered_runs": registered_runs,
+            "total_runs": len(_runs),
         }

@@ -43,6 +43,7 @@ const voiceBtn = document.getElementById("voiceBtn");
 
 const welcomeScreen = document.getElementById("welcomeScreen");
 const messagesContainer = document.getElementById("messagesContainer");
+const composerArea = document.querySelector(".composer-area");
 
 const newChatBtn = document.getElementById("newChatBtn");
 
@@ -103,13 +104,28 @@ function refreshIcons() {
 }
 
 
-function hideWelcomeScreen() {
-    welcomeScreen.style.display = "none";
+function ensureComposerVisible() {
+    if (composerArea) {
+        composerArea.style.display = "block";
+        composerArea.style.visibility = "visible";
+        composerArea.style.opacity = "1";
+    }
 }
 
+function hideWelcomeScreen() {
+    if (welcomeScreen) {
+        welcomeScreen.style.display = "none";
+    }
+
+    ensureComposerVisible();
+}
 
 function showWelcomeScreen() {
-    welcomeScreen.style.display = "block";
+    if (welcomeScreen) {
+        welcomeScreen.style.display = "block";
+    }
+
+    ensureComposerVisible();
 }
 
 
@@ -907,7 +923,7 @@ async function createNewConversation() {
 
         conversationId = data.conversation_id;
 
-        localStorage.setItem(
+        sessionStorage.setItem(
             STORAGE_KEY,
             conversationId
         );
@@ -1093,6 +1109,8 @@ document.querySelectorAll(".nav-item[data-page]").forEach((button) => {
 
             chatView.style.display = "flex";
             placeholderView.style.display = "none";
+
+            ensureComposerVisible();
 
         } else {
 
