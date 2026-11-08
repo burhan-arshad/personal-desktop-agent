@@ -1,0 +1,392 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#171918">
+    <title>AETHRIX — Desktop Intelligence</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <link rel="stylesheet" href="style.css">
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+
+<body>
+    <div class="app-shell">
+
+        <!-- SIDEBAR -->
+        <aside class="sidebar">
+
+            <div class="brand">
+                <div class="brand-symbol">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+
+                <div class="brand-copy">
+                    <h1>AETHRIX</h1>
+                    <p>DESKTOP INTELLIGENCE</p>
+                </div>
+            </div>
+
+            <div class="sidebar-divider"></div>
+
+            <button class="new-chat-btn" id="newChatBtn">
+                <i data-lucide="plus"></i>
+                <span>New session</span>
+                <kbd>⌘ K</kbd>
+            </button>
+
+            <div class="nav-section">
+                <p class="section-label">WORKSPACE</p>
+
+                <button class="nav-item active" data-page="chat">
+                    <i data-lucide="command"></i>
+                    <span>Assistant</span>
+                    <span class="nav-indicator"></span>
+                </button>
+
+                <button class="nav-item" data-page="activity">
+                    <i data-lucide="activity"></i>
+                    <span>Activity log</span>
+                </button>
+
+                <button class="nav-item" data-page="scheduler">
+                    <i data-lucide="calendar-clock"></i>
+                    <span>Scheduler</span>
+                </button>
+
+                <button class="nav-item" data-page="approvals">
+                    <i data-lucide="shield-check"></i>
+                    <span>Approvals</span>
+                    <span class="approval-count" id="approvalCount">0</span>
+                </button>
+            </div>
+
+            <div class="sidebar-bottom">
+                <div class="sidebar-divider"></div>
+
+                <button class="nav-item" data-page="settings">
+                    <i data-lucide="settings-2"></i>
+                    <span>Settings</span>
+                </button>
+
+                <div class="workspace-card">
+                    <div class="workspace-top">
+                        <span class="status-dot" id="connectionDot"></span>
+                        <span class="workspace-label">SYSTEM STATUS</span>
+                    </div>
+
+                    <h3 id="systemStatus">Connecting...</h3>
+                    <p id="connectionText">Checking local runtime</p>
+                </div>
+
+                <div class="sidebar-footer">
+                    <div class="avatar">A</div>
+                    <div>
+                        <strong>AETHRIX</strong>
+                        <span>Personal workspace</span>
+                    </div>
+                    <i data-lucide="more-horizontal"></i>
+                </div>
+            </div>
+        </aside>
+
+
+        <!-- MAIN WORKSPACE -->
+        <main class="main-panel">
+
+            <header class="topbar">
+                <div class="breadcrumb">
+                    <span>WORKSPACE</span>
+                    <i data-lucide="chevron-right"></i>
+                    <strong id="pageTitle">Assistant</strong>
+                </div>
+
+                <div class="topbar-right">
+                    <div class="runtime-indicator">
+                        <span class="status-dot"></span>
+                        LOCAL RUNTIME
+                    </div>
+
+                    <button class="icon-button" title="Settings">
+                        <i data-lucide="sliders-horizontal"></i>
+                    </button>
+                </div>
+            </header>
+
+
+            <!-- CHAT VIEW -->
+            <section class="chat-view" id="chatView">
+
+                <div class="chat-content" id="chatContent">
+
+                    <!-- WELCOME -->
+                    <div class="welcome-screen" id="welcomeScreen">
+
+                        <div class="welcome-overline">
+                            <span class="overline-line"></span>
+                            <span>PERSONAL DESKTOP INTELLIGENCE</span>
+                        </div>
+
+                        <div class="hero-heading">
+                            <h2>
+                                Your desktop.<br>
+                                <span>Under command.</span>
+                            </h2>
+
+                            <div class="hero-index">
+                                <span>01</span>
+                                <span>—</span>
+                                <span>INTELLIGENCE</span>
+                            </div>
+                        </div>
+
+                        <p class="hero-description">
+                            An intelligent layer between you and your computer.
+                            Give an instruction, review the action, and stay in control.
+                        </p>
+
+                        <div class="hero-divider"></div>
+
+                        <div class="quick-actions-heading">
+                            <span>QUICK COMMANDS</span>
+                            <span>SELECT TO EXECUTE</span>
+                        </div>
+
+                        <div class="quick-actions">
+
+                            <button class="quick-prompt" data-prompt="Open Calculator">
+                                <div class="quick-icon">
+                                    <i data-lucide="calculator"></i>
+                                </div>
+                                <div>
+                                    <strong>Open Calculator</strong>
+                                    <span>Launch a desktop application</span>
+                                </div>
+                                <i data-lucide="arrow-up-right" class="quick-arrow"></i>
+                            </button>
+
+                            <button class="quick-prompt" data-prompt="Open Microsoft Edge">
+                                <div class="quick-icon">
+                                    <i data-lucide="globe"></i>
+                                </div>
+                                <div>
+                                    <strong>Open Browser</strong>
+                                    <span>Launch Microsoft Edge</span>
+                                </div>
+                                <i data-lucide="arrow-up-right" class="quick-arrow"></i>
+                            </button>
+
+                            <button class="quick-prompt" data-prompt="Search the web for latest AI news">
+                                <div class="quick-icon">
+                                    <i data-lucide="search"></i>
+                                </div>
+                                <div>
+                                    <strong>Search the web</strong>
+                                    <span>Find information online</span>
+                                </div>
+                                <i data-lucide="arrow-up-right" class="quick-arrow"></i>
+                            </button>
+
+                            <button class="quick-prompt" data-prompt="Open WhatsApp Web">
+                                <div class="quick-icon">
+                                    <i data-lucide="message-circle"></i>
+                                </div>
+                                <div>
+                                    <strong>WhatsApp Web</strong>
+                                    <span>Open your messaging workspace</span>
+                                </div>
+                                <i data-lucide="arrow-up-right" class="quick-arrow"></i>
+                            </button>
+
+                        </div>
+                    </div>
+
+
+                    <!-- CHAT MESSAGES -->
+                    <div class="messages-container" id="messagesContainer"></div>
+
+                </div>
+
+
+                <!-- COMPOSER -->
+                <div class="composer-area">
+
+                    <div class="composer-shell">
+
+                        <textarea
+                            id="messageInput"
+                            placeholder="Give AETHRIX an instruction..."
+                            rows="1"
+                        ></textarea>
+
+                        <div class="composer-bottom">
+
+                            <div class="composer-tools">
+                                <span class="input-mode">
+                                    <i data-lucide="command"></i>
+                                    COMMAND
+                                </span>
+
+                                <span class="composer-hint">
+                                    Enter to send · Shift + Enter for new line
+                                </span>
+                            </div>
+
+                            <div class="composer-actions">
+                                <button class="voice-btn" id="voiceBtn" title="Voice input">
+                                    <i data-lucide="mic"></i>
+                                </button>
+
+                                <button class="send-btn" id="sendBtn" title="Send instruction">
+                                    <i data-lucide="arrow-up"></i>
+                                </button>
+                            </div>
+
+                        </div>
+                    </div>
+
+                    <p class="composer-disclaimer">
+                        AETHRIX can make changes to your desktop. Sensitive actions require your approval.
+                    </p>
+
+                </div>
+
+            </section>
+
+
+            <!-- OTHER PAGES -->
+            <section class="placeholder-view" id="placeholderView">
+                <div class="placeholder-inner">
+                    <span class="placeholder-index">WORKSPACE MODULE</span>
+                    <div class="placeholder-icon">
+                        <i data-lucide="layers"></i>
+                    </div>
+                    <h2 id="placeholderTitle">Coming soon</h2>
+                    <p id="placeholderDescription">
+                        This workspace module is not connected yet.
+                    </p>
+                    <span class="placeholder-status">UNDER DEVELOPMENT</span>
+                </div>
+            </section>
+
+        </main>
+
+
+        <!-- RIGHT INTELLIGENCE PANEL -->
+        <aside class="insight-panel">
+
+            <div class="insight-header">
+                <span>LIVE MONITOR</span>
+                <i data-lucide="activity"></i>
+            </div>
+
+            <div class="agent-overview">
+                <div class="overview-label">
+                    <span>AGENT STATE</span>
+                    <span class="live-tag">LIVE</span>
+                </div>
+
+                <div class="agent-visual">
+                    <div class="agent-ring ring-one"></div>
+                    <div class="agent-ring ring-two"></div>
+                    <div class="agent-core">
+                        <div class="agent-core-symbol">
+                            <span></span>
+                            <span></span>
+                            <span></span>
+                        </div>
+                    </div>
+                </div>
+
+                <h3 id="agentState">Standby</h3>
+                <p>Waiting for your next instruction</p>
+            </div>
+
+
+            <div class="insight-divider"></div>
+
+
+            <div class="metrics-section">
+                <div class="panel-heading">
+                    <span>RUNTIME</span>
+                    <i data-lucide="gauge"></i>
+                </div>
+
+                <div class="metric-row">
+                    <span>Execution</span>
+                    <strong>LOCAL</strong>
+                </div>
+
+                <div class="metric-row">
+                    <span>Interface</span>
+                    <strong>WEB UI</strong>
+                </div>
+
+                <div class="metric-row">
+                    <span>Control mode</span>
+                    <strong>HUMAN-IN-LOOP</strong>
+                </div>
+
+                <div class="metric-row">
+                    <span>Backend</span>
+                    <strong id="systemStatus">Checking</strong>
+                </div>
+            </div>
+
+
+            <div class="insight-divider"></div>
+
+
+            <div class="activity-section">
+                <div class="panel-heading">
+                    <span>RECENT ACTIVITY</span>
+                    <i data-lucide="list-clock"></i>
+                </div>
+
+                <div class="activity-list" id="activityList">
+                    <div class="empty-activity" id="emptyActivity">
+                        <i data-lucide="history"></i>
+                        <p>No activity recorded yet.</p>
+                    </div>
+                </div>
+            </div>
+
+
+            <div class="security-card">
+                <div class="security-icon">
+                    <i data-lucide="shield-check"></i>
+                </div>
+
+                <div>
+                    <strong>Safety layer active</strong>
+                    <p>Actions are evaluated before execution.</p>
+                </div>
+
+                <span class="security-indicator"></span>
+            </div>
+
+
+            <div class="insight-footer">
+                <span>AETHRIX</span>
+                <span>BUILD 01.0</span>
+            </div>
+
+        </aside>
+
+    </div>
+
+    <script src="app.js"></script>
+    <script>
+        if (window.lucide) {
+            lucide.createIcons();
+        }
+    </script>
+</body>
+</html>
