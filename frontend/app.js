@@ -8,8 +8,26 @@ const API_BASE = "http://127.0.0.1:8000";
 const STORAGE_KEY = "aethrix_conversation_id";
 const PENDING_THREAD_KEY = "aethrix_pending_thread_id";
 
-let conversationId = localStorage.getItem(STORAGE_KEY);
-let activeThreadId = localStorage.getItem(PENDING_THREAD_KEY);
+// Migrate old shared storage into this tab's session.
+function migrateSessionValue(key) {
+    const sessionValue = sessionStorage.getItem(key);
+
+    if (sessionValue !== null) {
+        return sessionValue;
+    }
+
+    const legacyValue = localStorage.getItem(key);
+
+    if (legacyValue !== null) {
+        sessionStorage.setItem(key, legacyValue);
+        localStorage.removeItem(key);
+    }
+
+    return legacyValue;
+}
+
+let conversationId = migrateSessionValue(STORAGE_KEY);
+let activeThreadId = migrateSessionValue(PENDING_THREAD_KEY);
 
 let isSending = false;
 let isApproving = false;
@@ -229,6 +247,80 @@ function addMessage(text, sender = "user") {
     return row;
 }
 
+// =============================================
+// RESTORE CONVERSATION HISTORY
+// =============================================
+
+async function loadConversationHistory() {
+
+    if (!conversationId) {
+        console.log("[AETHRIX] No previous conversation to restore.");
+        return;
+    }
+
+    try {
+
+        console.log(
+            "[AETHRIX] Loading conversation history:",
+            conversationId
+        );
+
+        const data = await apiRequest(
+            `/api/conversation/${encodeURIComponent(conversationId)}/history`
+        );
+
+        const history = Array.isArray(data.messages)
+            ? data.messages
+            : [];
+
+        messagesContainer.innerHTML = "";
+
+        // No previous messages.
+        if (history.length === 0) {
+
+            showWelcomeScreen();
+
+            console.log(
+                "[AETHRIX] Conversation is empty."
+            );
+
+            return;
+        }
+
+        hideWelcomeScreen();
+
+        // Restore messages in their original order.
+        history.forEach((message) => {
+
+            if (
+                !message ||
+                !["user", "assistant"].includes(message.role)
+            ) {
+                return;
+            }
+
+            addMessage(
+                message.content,
+                message.role
+            );
+
+        });
+
+        console.log(
+            `[AETHRIX] Restored ${history.length} messages.`
+        );
+
+    } catch (error) {
+
+        console.error(
+            "[AETHRIX] History restoration failed:",
+            error.message
+        );
+
+        // Preserve the existing conversation ID.
+        // The user can still continue using the backend.
+    }
+}
 
 // =============================================
 // LOADING INDICATOR
@@ -320,13 +412,12 @@ function updateAgentStatus(status) {
 // =============================================
 
 function savePendingThread(threadId) {
-
     activeThreadId = threadId;
 
     if (threadId) {
-        localStorage.setItem(PENDING_THREAD_KEY, threadId);
+        sessionStorage.setItem(PENDING_THREAD_KEY, threadId);
     } else {
-        localStorage.removeItem(PENDING_THREAD_KEY);
+        sessionStorage.removeItem(PENDING_THREAD_KEY);
     }
 }
 
@@ -441,8 +532,12 @@ async function submitApproval(
     approveBtn,
     denyBtn
 ) {
+    const threadId = card?.dataset.threadId;
 
-    if (!activeThreadId || isApproving) {
+    if (!threadId || isApproving) {
+        console.error(
+            "[AETHRIX] Approval rejected: missing thread ID or request already processing."
+        );
         return;
     }
 
@@ -454,9 +549,8 @@ async function submitApproval(
     approveBtn.textContent = "Processing...";
 
     try {
-
         const result = await apiRequest(
-            `/api/agent/${activeThreadId}/approval`,
+            `/api/agent/${encodeURIComponent(threadId)}/approval`,
             {
                 method: "POST",
                 headers: {
@@ -479,15 +573,15 @@ async function submitApproval(
         );
 
         if (result.status === "approval_required") {
-
             showApprovalCard(result);
 
         } else {
-
-            savePendingThread(null);
+            // Clear only the thread that this card belongs to.
+            if (activeThreadId === threadId) {
+                savePendingThread(null);
+            }
 
             const messages = {
-
                 completed:
                     "The desktop task was completed successfully.",
 
@@ -508,7 +602,6 @@ async function submitApproval(
 
                 error:
                     "The task could not be completed."
-
             };
 
             addMessage(
@@ -519,7 +612,6 @@ async function submitApproval(
         }
 
     } catch (error) {
-
         approveBtn.disabled = false;
         denyBtn.disabled = false;
 
@@ -530,10 +622,12 @@ async function submitApproval(
             "assistant"
         );
 
-        console.error("[AETHRIX] Approval error:", error);
+        console.error(
+            "[AETHRIX] Approval error:",
+            error
+        );
 
     } finally {
-
         isApproving = false;
     }
 }
@@ -549,7 +643,7 @@ function processResponse(data) {
 
         conversationId = data.conversation_id;
 
-        localStorage.setItem(
+        sessionStorage.setItem(
             STORAGE_KEY,
             conversationId
         );
@@ -1038,22 +1132,32 @@ document.addEventListener("keydown", (event) => {
 // STARTUP
 // =============================================
 
+// =============================================
+// STARTUP
+// =============================================
+
 async function initializeAethrix() {
 
     console.log("================================");
     console.log("       AETHRIX AI SYSTEM        ");
     console.log("================================");
 
+    // 1. Check backend availability.
     await checkBackend();
 
+    // 2. Restore previous conversation.
+    await loadConversationHistory();
+
+    // 3. Recover pending approval.
     await recoverPendingApproval();
 
+    // 4. Monitor backend health.
     setInterval(checkBackend, 15000);
 
     if (conversationId) {
 
         console.log(
-            "[AETHRIX] Existing conversation:",
+            "[AETHRIX] Active conversation:",
             conversationId
         );
     }

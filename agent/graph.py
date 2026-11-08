@@ -60,9 +60,6 @@ TASKBAR_APP_ALIASES = {
         "vs code",
         "vscode",
     ],
-    "whatsapp": [
-        "whatsapp",
-    ],
     "microsoft store": [
         "microsoft store",
     ],

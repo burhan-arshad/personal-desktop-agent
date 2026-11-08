@@ -166,19 +166,36 @@ def prepare_send_whatsapp_message(instruction):
             "for example +923001234567."
         )
 
-    message_match = re.search(
-        r"(?:\bmessage\s*:\s*|\bsaying\s+)(.+)$",
+    # Extract quoted message first to avoid including trailing quotes
+    # or punctuation in the actual WhatsApp message.
+    quoted_match = re.search(
+        r"""(?:\bmessage\s*:\s*|\bsaying\s+|\bwith\s+the\s+text\s+|\bwith\s+message\s+)["'](.+?)["']\s*[.!?]*$""",
         instruction,
         flags=re.IGNORECASE | re.DOTALL,
     )
 
-    if not message_match:
-        raise ValueError(
-            'Add the message using "saying" or "message:", '
-            'for example: saying Assalam o Alaikum'
+    if quoted_match:
+        message = quoted_match.group(1).strip()
+
+    else:
+        message_match = re.search(
+            r"(?:"
+            r"\bmessage\s*:\s*"
+            r"|\bsaying\s+"
+            r"|\bwith\s+the\s+text\s+"
+            r"|\bwith\s+message\s+"
+            r")(.+)$",
+            instruction,
+            flags=re.IGNORECASE | re.DOTALL,
         )
 
-    message = message_match.group(1).strip().strip("\"'")
+        if not message_match:
+            raise ValueError(
+                'Add the message using "saying" or "message:", '
+                'for example: saying Assalam o Alaikum'
+            )
+
+        message = message_match.group(1).strip().strip("\"'")
 
     if not message:
         raise ValueError("WhatsApp message cannot be empty.")
@@ -187,7 +204,6 @@ def prepare_send_whatsapp_message(instruction):
         "phone": phone_match.group(1),
         "message": message,
     }
-
 
 def send_whatsapp_message(payload):
     phone = re.sub(r"\D", "", payload["phone"])
@@ -323,7 +339,10 @@ def match_skill(instruction):
         return None
 
     text = instruction.lower().strip()
-
+    # WhatsApp must always use WhatsApp Web, never the desktop app.
+    if "whatsapp" in text:
+        return "send_whatsapp_message"
+    
     patterns = {
         "send_whatsapp_message": [
             "send whatsapp message",

@@ -348,3 +348,27 @@ def get_run(thread_id: str) -> dict:
             False,
         ),
     }
+
+def get_runtime_status() -> dict:
+    with _registry_lock:
+        active_run = _runs.get(_active_thread_id) if _active_thread_id else None
+
+        return {
+            "active_thread_id": _active_thread_id,
+            "active_run": {
+                "thread_id": active_run.get("thread_id"),
+                "instruction": active_run.get("instruction"),
+                "status": active_run.get("status"),
+                "approval_required": active_run.get("approval_required"),
+                "conversation_id": active_run.get("conversation_id"),
+            } if active_run else None,
+            "registered_runs": [
+                {
+                    "thread_id": run.get("thread_id"),
+                    "instruction": run.get("instruction"),
+                    "status": run.get("status"),
+                    "approval_required": run.get("approval_required"),
+                }
+                for run in _runs.values()
+            ],
+        }

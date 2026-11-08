@@ -14,11 +14,11 @@ from api.runtime import (
     start_agent,
     respond_to_approval,
     get_run,
+    get_runtime_status,
 )
 
 from conversation.memory import (
     start_conversation,
-    get_active_conversation,
     get_recent_history,
     save_message,
 )
@@ -84,6 +84,9 @@ def health():
         "service": "Personal Desktop AI Agent",
     }
 
+@app.get("/api/debug/runtime")
+def runtime_debug():
+    return get_runtime_status()
 
 # =========================
 # DIRECT AGENT CHAT
@@ -123,10 +126,7 @@ def conversation(request: ConversationRequest):
         )
 
     try:
-        conversation_id = (
-            request.conversation_id
-            or get_active_conversation()
-        )
+        conversation_id = request.conversation_id or start_conversation()
 
         history = get_recent_history(
             conversation_id,
