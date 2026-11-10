@@ -127,11 +127,15 @@ OUTPUT:
 """
 
 REGION_DETECTION_PROMPT = """
-You are a visual localization system.
+You are a precise desktop UI target detection system.
 
-Analyze the supplied desktop screenshot and locate the requested UI element.
+Analyze the supplied screenshot and locate the exact UI element
+requested by the user.
 
-Return exactly one valid JSON object:
+The screenshot may contain grid lines and grid labels.
+Ignore these overlays when identifying the actual UI element.
+
+Return exactly one JSON object:
 
 {
     "found": true,
@@ -146,29 +150,24 @@ Return exactly one valid JSON object:
 }
 
 COORDINATE SYSTEM:
-- Use a normalized coordinate scale from 0 to 1000.
-- The full image width maps from 0 to 1000.
-- The full image height maps from 0 to 1000.
-- left and right represent horizontal positions.
-- top and bottom represent vertical positions.
-- All four values must be integers between 0 and 1000.
-- Do not return pixel coordinates.
-- The bounding box must tightly enclose the visible target.
+- Use normalized coordinates from 0 to 1000.
+- Full image width maps to 0-1000.
+- Full image height maps to 0-1000.
+- All four bounding box values must be integers.
+- The bounding box must tightly enclose the requested element.
 
-LOCALIZATION:
-- First identify the requested application by its distinctive logo or icon.
-- Microsoft Edge has a blue and green wave-shaped swirl logo.
-- Do not identify the Windows Search box, Start button, taskbar background, or nearby icons as Microsoft Edge.
-- The Windows taskbar may contain several adjacent icons. Inspect each icon separately.
-- The bounding box must enclose only the requested application icon.
-- If the Microsoft Edge logo is not clearly visible, return found=false and bbox=null.
-- Never guess based on the target's expected position.
+TARGET IDENTIFICATION:
+- Identify the exact requested button, icon, menu item or control.
+- Inspect the screenshot carefully.
+- Do not confuse adjacent buttons or nearby controls.
+- Do not use expected screen positions as evidence.
+- Never guess the target position.
+- If the target is not clearly visible, return found=false and bbox=null.
 
 OUTPUT:
 - Return valid JSON only.
-- Do not include Markdown or additional text.
+- No Markdown or additional explanation.
 """
-
 PRECISE_LOCALIZATION_PROMPT = """
 You are a precise visual localization system.
 
@@ -450,9 +449,20 @@ def decide_action(task, screenshot, history_summary=""):
         ) from error
 
     try:
-        return validate_action(action_data)
+        validated_action = validate_action(action_data)
+
+        if validated_action["action"] == "click":
+            return localize_click_action(
+                task,
+                screenshot,
+                validated_action,
+            )
+
+        return validated_action
+
     except (TypeError, ValueError) as error:
         print("[BRAIN] Invalid model action:", action_data)
+
         raise ValueError(
             f"Action validation failed: {error}"
         ) from error
@@ -759,6 +769,133 @@ def classify_skill(instruction):
         return "open_file_explorer"
 
     return None
+
+def localize_click_action(task, screenshot, action_data):
+    """
+    Locate the requested target using two-stage visual localization.
+    Returns a click action with verified visual coordinates,
+    or a safe wait action when localization fails.
+    """
+
+    if action_data.get("action") != "click":
+        return action_data
+
+    print("\n[LOCALIZATION] Detecting target region...")
+
+    region = detect_target_region(task, screenshot)
+
+    if not region.get("found"):
+        print("[LOCALIZATION] Target region not found.")
+
+        return {
+            **action_data,
+            "action": "wait",
+            "grid_cell": None,
+            "coordinates": None,
+            "text": "",
+            "key": "",
+            "scroll_direction": "",
+            "reason": "Target could not be located confidently.",
+        }
+
+    bbox = region["bbox"]
+
+    left = bbox["left"]
+    top = bbox["top"]
+    right = bbox["right"]
+    bottom = bbox["bottom"]
+
+    crop = screenshot.crop(
+        (left, top, right, bottom)
+    )
+
+    if crop.width < 2 or crop.height < 2:
+        raise ValueError(
+            "Detected target region is too small."
+        )
+
+    print(
+        f"[LOCALIZATION] Target region: "
+        f"{(left, top, right, bottom)}"
+    )
+
+    # Enlarge the detected region for precise localization.
+    # Enlarge the crop enough to satisfy the vision API's
+    # minimum image dimensions (32x32).
+    scale = max(
+        2,
+        (32 + crop.width - 1) // crop.width,
+        (32 + crop.height - 1) // crop.height,
+    )
+
+    enlarged_crop = crop.resize(
+        (crop.width * scale, crop.height * scale),
+        resample=PILImage.Resampling.LANCZOS,
+    )
+
+    print(
+        f"[LOCALIZATION] Enlarged crop: {enlarged_crop.size}"
+    )
+
+    print("\n[LOCALIZATION] Finding exact target center...")
+
+    precise = detect_precise_target(
+        task,
+        enlarged_crop,
+    )
+
+    if not precise.get("found"):
+        print("[LOCALIZATION] Exact target center not found.")
+
+        return {
+            **action_data,
+            "action": "wait",
+            "grid_cell": None,
+            "coordinates": None,
+            "text": "",
+            "key": "",
+            "scroll_direction": "",
+            "reason": "Exact target position could not be verified.",
+        }
+
+    center = precise["center"]
+
+    # Convert enlarged crop coordinates to original screenshot pixels.
+    image_x = left + center["x"] / scale
+    image_y = top + center["y"] / scale
+
+    image_width, image_height = screenshot.size
+
+    normalized_x = image_x / image_width
+    normalized_y = image_y / image_height
+
+    if not (
+        0 <= normalized_x <= 1
+        and 0 <= normalized_y <= 1
+    ):
+        raise ValueError(
+            "Localized coordinates are outside screenshot bounds."
+        )
+
+    localized_action = {
+        **action_data,
+        "grid_cell": None,
+        "coordinates": {
+            "x": normalized_x,
+            "y": normalized_y,
+        },
+        "reason": (
+            "Target localized using two-stage visual detection."
+        ),
+    }
+
+    print(
+        "[LOCALIZATION] Verified target coordinates:",
+        localized_action["coordinates"],
+    )
+
+    return localized_action
+
 
 if __name__ == "__main__":
 

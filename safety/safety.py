@@ -129,6 +129,12 @@ def classify_risk(action: dict) -> str:
         action.get("action", "")
     ).strip().lower()
 
+    # Resolve skill wrapper to its actual registered skill action.
+    if action_name == "skill":
+        action_name = str(
+            action.get("skill_name", "")
+        ).strip().lower()
+
     # Reject unknown actions.
     if action_name not in ALLOWED_ACTIONS | ALLOWED_SKILL_ACTIONS:
         return "blocked"

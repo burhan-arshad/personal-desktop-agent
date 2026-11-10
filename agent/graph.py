@@ -24,7 +24,7 @@ from langgraph.types import interrupt, Command
 from voice.voice import listen, get_model
 from voice.speech import speak
 
-from perception.perception import capture_grid
+from perception.perception import capture_grid, capture_clean_screenshot
 from perception.verification import verify_screen_change
 from brain.brain import decide_action, classify_skill
 from actuator.actuator import execute_action
@@ -36,7 +36,7 @@ from memory.memory import (
     log_step,
     log_confirmation,
 )
-from skills.skills import SKILL_REGISTRY, match_skill
+from skills.skills import SKILL_REGISTRY, match_skill, split_compound_instruction
 
 MAX_STEPS = 4
 MAX_UNCHANGED_ATTEMPTS = 1
@@ -143,6 +143,8 @@ class AgentState(TypedDict):
     is_scheduled: bool
     scheduled_task_id: int
     scheduled_abort_reason: str
+    compound_next_instruction: str
+    is_compound: bool
 
 
 def summarize_recent(history):
@@ -178,6 +180,58 @@ def update_latest_history(state, result):
 def skill_match_node(state: AgentState) -> dict:
     print("\n[SKILL MATCH] Resolving user instruction...")
 
+    compound = split_compound_instruction(
+        state["instruction"]
+    )
+
+    if compound:
+        skill_name = "open_app"
+        skill = SKILL_REGISTRY.get(skill_name)
+
+        if skill is None:
+            return {
+                "skill_error": "open_app skill is not registered.",
+                "is_done": True,
+            }
+
+        try:
+            payload = skill["prepare"](
+                f"open {compound['app_name']}"
+            )
+        except Exception as error:
+            return {
+                "skill_error": str(error),
+                "is_done": True,
+            }
+
+        action = {
+            "action": "skill",
+            "skill_name": skill_name,
+            "target": compound["app_name"],
+            "text": "",
+            "risk_level": "safe",
+            "payload": payload,
+            "instruction": f"Open {compound['app_name']}",
+        }
+
+        return {
+            "skill_name": skill_name,
+            "skill_payload": payload,
+            "execution_mode": "skill",
+            "last_action": action,
+            "history": state["history"] + [
+                {
+                    **action,
+                    "result": "proposed",
+                }
+            ],
+            "compound_next_instruction": compound[
+                "next_instruction"
+            ],
+            "is_compound": True,
+            "is_done": False,
+            "human_approved": False,
+        }
     # First, check whether this is a supported taskbar launch request.
     app_name = resolve_taskbar_app(state["instruction"])
 
@@ -400,6 +454,10 @@ def think_node(state: AgentState) -> dict:
     if (
         is_simple_click_task
         and state["step_count"] >= 1
+        and (
+            not state.get("is_compound", False)
+            or state["step_count"] >= 2
+        )
     ):
         message = (
             "A click action has already been executed for this "
@@ -426,9 +484,12 @@ def think_node(state: AgentState) -> dict:
         }
 
     try:
-        current_image = Image.open(
-            BytesIO(state["current_image"])
-        ).convert("RGB")
+        # Use a clean original-resolution screenshot for visual analysis.
+        current_image = capture_clean_screenshot()
+
+        print(
+            f"[THINK] Clean screenshot for Brain: {current_image.size}"
+        )
 
         history_summary = summarize_recent(state["history"])
 
@@ -914,7 +975,10 @@ def act_node(state: AgentState) -> dict:
     print(f"Target: {action.get('target', '')}")
 
     try:
-        # Existing skill execution
+        # ==========================================
+        # SKILL EXECUTION
+        # ==========================================
+
         if state["execution_mode"] == "skill":
             skill_name = state["skill_name"]
             skill = SKILL_REGISTRY.get(skill_name)
@@ -924,10 +988,43 @@ def act_node(state: AgentState) -> dict:
                     f"Skill is not registered: {skill_name}"
                 )
 
-            result = skill["execute"](state["skill_payload"])
+            result = skill["execute"](
+                state["skill_payload"]
+            )
 
             print(f"[SKILL RESULT] {result}")
 
+            next_instruction = state.get(
+                "compound_next_instruction", ""
+            ).strip()
+
+            # Continue with the next compound action.
+            if next_instruction:
+                print(
+                    "\n[COMPOUND] App opened successfully. "
+                    f"Next action: {next_instruction}"
+                )
+
+                return {
+                    "history": update_latest_history(
+                        state,
+                        f"skill execution returned: {result}",
+                    ),
+                    "instruction": next_instruction,
+                    "compound_next_instruction": "",
+                    "execution_mode": "vision",
+                    "skill_name": "",
+                    "skill_payload": {},
+                    "step_count": state["step_count"] + 1,
+                    "is_done": False,
+                    "human_approved": False,
+                    "current_image": b"",
+                    "pre_action_image": b"",
+                    "verification_feedback": "",
+                    "unchanged_count": 0,
+                }
+
+            # Normal skill completion.
             return {
                 "history": update_latest_history(
                     state,
@@ -935,9 +1032,13 @@ def act_node(state: AgentState) -> dict:
                 ),
                 "step_count": state["step_count"] + 1,
                 "is_done": True,
+                "human_approved": False,
             }
 
-        # UIA element click
+        # ==========================================
+        # UIA ELEMENT CLICK
+        # ==========================================
+
         elif action.get("action") == "uia_click":
 
             expected_window = (
@@ -955,7 +1056,9 @@ def act_node(state: AgentState) -> dict:
                 }
 
             else:
-                validation = validate_active_window(expected_window)
+                validation = validate_active_window(
+                    expected_window
+                )
 
                 if not validation["success"]:
                     result = {
@@ -971,7 +1074,11 @@ def act_node(state: AgentState) -> dict:
                         automation_id=action.get("automation_id"),
                         expected_window=expected_window
                     )
-        # UIA text entry
+
+        # ==========================================
+        # UIA TEXT ENTRY
+        # ==========================================
+
         elif action.get("action") == "uia_type":
 
             expected_window = (
@@ -989,7 +1096,9 @@ def act_node(state: AgentState) -> dict:
                 }
 
             else:
-                validation = validate_active_window(expected_window)
+                validation = validate_active_window(
+                    expected_window
+                )
 
                 if not validation["success"]:
                     result = {
@@ -1005,7 +1114,11 @@ def act_node(state: AgentState) -> dict:
                         automation_id=action.get("automation_id"),
                         expected_window=expected_window
                     )
-        # Existing vision-based execution
+
+        # ==========================================
+        # VISION-BASED EXECUTION
+        # ==========================================
+
         else:
 
             if not state["current_image"]:
@@ -1027,7 +1140,10 @@ def act_node(state: AgentState) -> dict:
         record_action_failure(state, error)
         raise
 
-    # Allow taskbar-launched applications time to open.
+    # ==========================================
+    # TASKBAR APPLICATION LAUNCH WAIT
+    # ==========================================
+
     if (
         state["execution_mode"] == "uia"
         and action_name == "click"
@@ -1037,6 +1153,10 @@ def act_node(state: AgentState) -> dict:
             "\n[ACT] Waiting 6 seconds for the application to launch..."
         )
         time.sleep(6)
+
+    # ==========================================
+    # COMMON EXECUTION RESULT
+    # ==========================================
 
     return {
         "pre_action_image": state["current_image"],
@@ -1168,11 +1288,7 @@ def after_act(state: AgentState):
         print("\n[ROUTER] Maximum attempt limit reached.")
         return END
 
-    if state["execution_mode"] == "skill":
-        return END
-
     return "capture"
-
 
 graph = StateGraph(AgentState)
 
@@ -1293,6 +1409,8 @@ def run_agent(instruction: str):
             "is_scheduled": False,
             "scheduled_task_id": 0,
             "scheduled_abort_reason": "",
+            "compound_next_instruction": "",
+            "is_compound": False,
         }
 
         config = {

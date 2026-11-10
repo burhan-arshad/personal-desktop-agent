@@ -113,6 +113,45 @@ def prepare_open_app(instruction):
 
     return {"app_name": app_name}
 
+def split_compound_instruction(instruction):
+    """
+    Split supported compound commands:
+    Open Calculator and click 5
+    Open Notepad and type Hello AETHRIX
+
+    Returns None if the instruction is not a supported compound command.
+    """
+
+    if not isinstance(instruction, str):
+        return None
+
+    instruction = instruction.strip()
+
+    match = re.match(
+        r"^(?P<app>.+?)\s+and\s+(?P<action>"
+        r"(?:please\s+)?(?:click|click on|click inside)\s+.+"
+        r"|(?:please\s+)?type\s+.+"
+        r")$",
+        instruction,
+        flags=re.IGNORECASE,
+    )
+
+    if not match:
+        return None
+
+    app_instruction = match.group("app").strip()
+    next_instruction = match.group("action").strip()
+
+    try:
+        app_payload = prepare_open_app(app_instruction)
+    except (ValueError, TypeError):
+        return None
+
+    return {
+        "app_name": app_payload["app_name"],
+        "next_instruction": next_instruction,
+    }
+
 def open_app(payload):
     executable=APP_ALIASES[payload["app_name"]]
     subprocess.Popen([executable])
