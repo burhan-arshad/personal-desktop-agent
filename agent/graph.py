@@ -13,6 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from perception.uia import (
     prepare_taskbar_click,
+    prepare_uia_click,
     click_uia_element,
     type_uia_text,
     validate_active_window,
@@ -438,22 +439,36 @@ def route_after_capture(state: AgentState):
 
 
 
+
 def think_node(state: AgentState) -> dict:
     print("\n[THINK] Asking the Brain for the next action...")
 
     instruction = state["instruction"].strip().lower()
 
-    # Simple click tasks should not trigger repeated exploratory clicks.
+    # ==========================================
+    # SIMPLE CLICK STOP GUARD
+    # ==========================================
+
     is_simple_click_task = (
         instruction.startswith("click ")
         or instruction.startswith("click inside ")
         or instruction.startswith("click on ")
     )
 
-    # Stop after one click for simple click tasks.
+    # Only count a click when its execution was successful.
+    has_executed_click = any(
+        item.get("action") in {"click", "uia_click"}
+        and (
+            item.get("result") is True
+            or str(item.get("result", "")).lower()
+            in {"success", "successful", "completed", "executed"}
+        )
+        for item in state.get("history", [])
+    )
+
     if (
         is_simple_click_task
-        and state["step_count"] >= 1
+        and has_executed_click
         and (
             not state.get("is_compound", False)
             or state["step_count"] >= 2
@@ -461,8 +476,7 @@ def think_node(state: AgentState) -> dict:
     ):
         message = (
             "A click action has already been executed for this "
-            "simple click task. Stopping to avoid repeated clicks. "
-            "Visual verification does not establish task completion."
+            "simple click task. Stopping to avoid repeated clicks."
         )
 
         print(f"\n[STOP] {message}")
@@ -484,7 +498,10 @@ def think_node(state: AgentState) -> dict:
         }
 
     try:
-        # Use a clean original-resolution screenshot for visual analysis.
+        # ==========================================
+        # CLEAN SCREENSHOT
+        # ==========================================
+
         current_image = capture_clean_screenshot()
 
         print(
@@ -541,21 +558,160 @@ def think_node(state: AgentState) -> dict:
         # VERIFICATION FEEDBACK
         # ==========================================
 
-        if state["verification_feedback"]:
+        if state.get("verification_feedback"):
             history_summary += (
                 "\n\nLatest visual verification feedback: "
                 f"{state['verification_feedback']}"
             )
 
         # ==========================================
-        # BRAIN DECISION
+        # CALCULATOR NUMBER BUTTONS
         # ==========================================
 
-        action = decide_action(
-            state["instruction"],
-            current_image,
-            history_summary,
+        number_buttons = {
+            "0": ("Zero", "num0Button"),
+            "1": ("One", "num1Button"),
+            "2": ("Two", "num2Button"),
+            "3": ("Three", "num3Button"),
+            "4": ("Four", "num4Button"),
+            "5": ("Five", "num5Button"),
+            "6": ("Six", "num6Button"),
+            "7": ("Seven", "num7Button"),
+            "8": ("Eight", "num8Button"),
+            "9": ("Nine", "num9Button"),
+        }
+
+        number_aliases = {
+            "0": ("0", "zero"),
+            "1": ("1", "one"),
+            "2": ("2", "two"),
+            "3": ("3", "three"),
+            "4": ("4", "four"),
+            "5": ("5", "five"),
+            "6": ("6", "six"),
+            "7": ("7", "seven"),
+            "8": ("8", "eight"),
+            "9": ("9", "nine"),
+        }
+
+        compound_instruction = state.get(
+            "compound_next_instruction",
+            "",
         )
+
+        target_text = (
+            f"{state['instruction']} {compound_instruction}"
+        ).lower()
+
+        # Normalize common punctuation before matching words.
+        normalized_words = (
+            target_text
+            .replace(",", " ")
+            .replace(".", " ")
+            .replace("!", " ")
+            .replace("?", " ")
+            .replace("-", " ")
+            .split()
+        )
+
+        requested_digit = next(
+            (
+                digit
+                for digit, aliases in number_aliases.items()
+                if any(alias in normalized_words for alias in aliases)
+            ),
+            None,
+        )
+
+        is_numeric_click = (
+            requested_digit is not None
+            and "click" in normalized_words
+        )
+
+        # ==========================================
+        # BRAIN DECISION / UIA DECISION
+        # ==========================================
+
+        if is_numeric_click:
+            button_name, automation_id = number_buttons[
+                requested_digit
+            ]
+
+            print(
+                "\n[UIA] Checking for Calculator number button:",
+                button_name,
+            )
+
+            prepared = prepare_uia_click(
+                name=button_name,
+                control_type="Button",
+                automation_id=automation_id,
+            )
+
+            if prepared.get("success"):
+                expected_window = prepared.get("window") or {}
+
+                window_title = str(
+                    expected_window.get("title", "")
+                ).lower()
+
+                if "calculator" in window_title:
+                    action = prepared["action"]
+
+                    action["window"] = expected_window
+
+                    # Preserve actual UIA element name.
+                    # Do not replace target with a custom description.
+                    action["reason"] = (
+                        f"Click Calculator number {requested_digit} "
+                        f"({button_name})"
+                    )
+
+                    print(
+                        "[UIA] Calculator button prepared:",
+                        automation_id,
+                    )
+
+                else:
+                    print(
+                        "[UIA] Active window is not Calculator. "
+                        "Using normal Brain decision."
+                    )
+
+                    action = decide_action(
+                        state["instruction"],
+                        current_image,
+                        history_summary,
+                    )
+
+            else:
+                print(
+                    "[UIA] Calculator button preparation failed:",
+                    prepared.get("reason"),
+                )
+
+                if "calculator" in target_text:
+                    raise RuntimeError(
+                        "Calculator UIA target could not be prepared. "
+                        "Refusing an unverified visual click."
+                    )
+
+                action = decide_action(
+                    state["instruction"],
+                    current_image,
+                    history_summary,
+                )
+
+        else:
+            action = decide_action(
+                state["instruction"],
+                current_image,
+                history_summary,
+            )
+
+    # ==========================================
+    # GROQ RATE LIMIT HANDLING
+    # ==========================================
 
     except Exception as error:
         error_text = str(error)
@@ -600,7 +756,7 @@ def think_node(state: AgentState) -> dict:
     print(f"Proposed action: {action}")
 
     # ==========================================
-    # WAIT ACTION - UPDATED
+    # WAIT ACTION
     # ==========================================
 
     if action.get("action") == "wait":

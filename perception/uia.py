@@ -3,6 +3,58 @@ import ctypes
 from ctypes import wintypes
 from pywinauto import Desktop
 
+def _get_active_window():
+    """
+    Get the current foreground window using Windows UI Automation.
+
+    Returns:
+        window: Pywinauto window specification.
+        result: Window metadata and success status.
+    """
+
+    try:
+        desktop = Desktop(backend="uia")
+
+        # Get the actual foreground window handle.
+        handle = ctypes.windll.user32.GetForegroundWindow()
+
+        if not handle:
+            return None, {
+                "success": False,
+                "reason": "No active foreground window found."
+            }
+
+        # Connect UI Automation to the foreground window.
+        window = desktop.window(handle=handle)
+
+        if not window.exists(timeout=2):
+            return None, {
+                "success": False,
+                "reason": "Foreground window could not be accessed."
+            }
+
+        if not window.is_visible():
+            return None, {
+                "success": False,
+                "reason": "Foreground window is not visible."
+            }
+
+        window_info = {
+            "handle": int(handle),
+            "title": window.window_text(),
+            "process_id": window.process_id(),
+        }
+
+        return window, {
+            "success": True,
+            "window": window_info,
+        }
+
+    except Exception as error:
+        return None, {
+            "success": False,
+            "reason": str(error),
+        }
 
 def find_taskbar_element(app_name: str):
     """
