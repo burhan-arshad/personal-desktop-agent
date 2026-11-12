@@ -1,366 +1,288 @@
-# Personal Desktop AI Agent
+# AETHRIX — Personal Desktop AI Assistant
 
-An AI-powered desktop assistant that allows users to control their Windows computer through natural language instructions.
+## About the Project
 
-The project combines Agentic AI, LangGraph, LLM-based reasoning, Computer Vision, Windows UI Automation, persistent memory, human-in-the-loop safety, personalization, and task scheduling to build an intelligent desktop automation system.
+**AETHRIX** is an AI-powered Personal Desktop Assistant designed to interact with a Windows computer using natural-language instructions.
 
-The goal is to create an assistant that can understand user instructions, perceive the desktop environment, make decisions, execute actions, and verify their results while maintaining safety and user control.
+Unlike traditional chatbots that primarily generate text responses, AETHRIX aims to understand user commands, perceive the desktop environment, make decisions, execute computer actions, and verify their outcomes.
 
-**Repository:** [Personal Desktop AI Agent](https://github.com/burhan-arshad/personal-desktop-agent)
+The project combines Agentic AI, Large Language Models (LLMs), computer-use automation, visual perception, and human-in-the-loop safety mechanisms into a unified desktop assistant.
 
----
+The ultimate objective is to build an intelligent assistant that can understand what a user wants and perform practical computer tasks while keeping the user in control.
 
-## Table of Contents
-
-- [Overview](#overview)
-- [Features](#features)
-- [System Architecture](#system-architecture)
-- [Technology Stack](#technology-stack)
-- [Project Structure](#project-structure)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Running the Agent](#running-the-agent)
-- [Task Scheduling](#task-scheduling)
-- [Safety and Reliability](#safety-and-reliability)
-- [Memory and Personalization](#memory-and-personalization)
-- [Current Limitations](#current-limitations)
-- [Development Roadmap](#development-roadmap)
-- [Author](#author)
-
----
-
-## Overview
-
-Personal Desktop AI Agent is a modular desktop automation system built with Python.
-
-Unlike traditional automation scripts that depend entirely on predefined instructions, this project uses an AI-powered reasoning layer to interpret natural language and determine appropriate desktop actions.
-
-The agent follows a perception-reasoning-action-verification workflow:
-
-1. Understand the user's instruction.
-2. Identify the required skill or execution strategy.
-3. Capture and inspect the desktop environment.
-4. Determine the next appropriate action.
-5. Evaluate the action using an independent safety system.
-6. Execute approved actions.
-7. Verify the result.
-8. Store execution information in persistent memory.
-
-The architecture supports both interactive and scheduled desktop automation.
-
----
-
-## Features
-
-### 1. Natural Language Desktop Control
-
-Users can interact with the assistant using natural language instructions.
-
-Examples:
-
-- Open Microsoft Edge.
-- Open Notepad.
-- Search the web.
-- Interact with supported desktop applications.
-- Perform supported multi-step tasks.
-
-The agent uses an LLM-powered reasoning system to interpret instructions and determine the next action.
-
-### 2. Hybrid Desktop Perception
-
-The project combines visual perception and Windows UI Automation to understand the desktop environment.
-
-**Visual Perception**
-
-- Screenshot capture using MSS.
-- Image processing using Pillow.
-- Grid-based screen representation.
-- Visual analysis for desktop interaction.
-- Before-and-after screen verification.
-
-**Windows UI Automation**
-
-- Accessible UI element detection.
-- Control-name identification.
-- Control-type identification.
-- Bounding-box extraction.
-- Element-based clicking and typing.
-- Application and taskbar interaction.
-
-This hybrid approach provides multiple ways to locate and interact with desktop elements.
-
-### 3. LangGraph Agent Orchestration
-
-LangGraph manages the agent's execution workflow.
-
-The graph separates different responsibilities into individual nodes.
-
-Core workflow components include:
-
-- Skill Matching
-- Screen Capture
-- AI Reasoning
-- Safety Check
-- Human Review
-- Action Execution
-- Result Verification
-
-Conditional routing determines what happens next based on the current agent state and safety classification.
-
-### 4. Human-in-the-Loop Safety System
-
-Safety is an essential part of the project.
-
-Every proposed action is evaluated before execution.
-
-The safety system uses three risk categories:
-
-| Risk Level | Behaviour |
-|---|---|
-| SAFE | Executes without an approval prompt. |
-| RISKY | Requires human approval during interactive execution. |
-| BLOCKED | Rejected by the safety system. |
-
-Additional safety mechanisms:
-
-- Independent action-risk classification.
-- Destructive-operation detection.
-- Unknown action rejection.
-- Human approval through LangGraph interrupts.
-- Safety decision logging.
-- Separate safety routing for scheduled tasks.
-
-The system does not blindly trust the risk label generated by the LLM.
-
-### 5. Persistent Memory
-
-SQLite is used to maintain persistent application data.
-
-The memory system stores:
-
-- Agent sessions.
-- Execution steps.
-- Action history.
-- Human confirmations.
-- User preferences.
-- Scheduled tasks.
-- Scheduled execution events.
-
-This provides traceability and helps diagnose execution failures.
-
-### 6. Personalization
-
-The personalization module allows the assistant to store and retrieve user preferences.
-
-Supported operations include:
-
-- Save a preference.
-- Retrieve a specific preference.
-- Retrieve all preferences.
-- Use stored preferences during agent reasoning.
-
-This allows the assistant to make decisions using previously saved configuration.
-
-### 7. Task Scheduling
-
-The project includes a separate scheduler process powered by Python's `schedule` library.
-
-Supported scheduling options:
-
-- Daily recurring tasks.
-- One-time scheduled tasks.
-- List scheduled tasks.
-- Disable scheduled tasks.
-
-Example schedule formats:
+### Example Commands
 
 ```text
-09:30
-daily@09:30
-once@2026-12-01T14:30
+Open Microsoft Edge and Search for Latest News
+
+Search for Python tutorials on Google.
+
+Open File Explorer.
+
+Take a screenshot of my desktop.
+
+Search for LangGraph tutorials on Youtube.
+
+Send a Whatsapp message to +920000000000 saying "Hello! How are you?"
 ```
 
-The scheduler operates independently from the interactive agent.
+These examples represent the intended interaction style; individual workflows may have different implementation and testing status.
 
-Scheduled execution follows a stricter safety policy:
 
-- SAFE actions are allowed.
-- RISKY actions are aborted.
-- BLOCKED actions are aborted.
-- Scheduled execution never waits for interactive human approval.
-- Execution events are recorded in SQLite.
+## Project Objectives
 
-The scheduler must remain running, and the computer must stay awake for scheduled tasks to execute.
-
----
+- Understand natural-language commands.
+- Convert user instructions into actionable tasks.
+- Capture and analyze the desktop environment.
+- Use LLM-powered reasoning to determine the next action.
+- Interact with Windows applications through automation.
+- Verify whether executed actions produce the expected results.
+- Require human approval before potentially risky operations.
+- Maintain execution history and persistent session information.
+- Provide a frontend/backend architecture for interacting with the assistant.
 
 ## System Architecture
 
-The project follows a modular architecture that separates perception, reasoning, execution, safety, and memory.
+AETHRIX follows a modular, graph-based agent architecture powered by LangGraph.
 
-### Interactive Execution
+### High-Level Workflow
 
-```text
-             USER INSTRUCTION
-                    |
-                    v
-              SKILL MATCHING
-                    |
-              +-----+-----+
-              |           |
-              v           v
-             UIA         VISION
-              |           |
-              +-----+-----+
-                    |
-                    v
-               AI REASONING
-                    |
-                    v
-                SAFETY CHECK
-                    |
-          +---------+---------+
-          |         |         |
-          v         v         v
-         SAFE     RISKY    BLOCKED
-          |         |         |
-          v         v         v
-       EXECUTE    HUMAN     REJECT
-                  REVIEW
-                    |
-                    v
-                 VERIFY
-                    |
-                    v
-              MEMORY AND LOGS
+```mermaid
+flowchart TD
+    A[User Instruction] --> B[Skill Matching]
+    B --> C{Known Skill?}
+    C -->|Yes| D[Skill Execution]
+    C -->|No| E[Desktop Perception]
+    D --> F[Capture Desktop]
+    E --> F
+    F --> G[Agent Reasoning]
+    G --> H[Action Preparation]
+    H --> I[Risk Classification]
+    I --> J{Approval Required?}
+    J -->|Yes| K[Human Review]
+    J -->|No| L[Action Execution]
+    K -->|Approved| L
+    K -->|Denied| M[Stop Execution]
+    L --> N[Result Verification]
+    N --> O{Task Complete?}
+    O -->|No| F
+    O -->|Yes| P[Final Response]
 ```
 
-### Scheduled Execution
+### Core Components
 
-Scheduled tasks use the same safety classification system but follow a separate execution route.
+#### 1. Agent Orchestration — LangGraph
 
-```text
-              SCHEDULED TASK
-                    |
-                    v
-               AGENT EXECUTION
-                    |
-                    v
-                SAFETY CHECK
-                    |
-              +-----+----------+
-              |                |
-              v                v
-             SAFE         RISKY / BLOCKED
-              |                |
-              v                v
-           EXECUTE            ABORT
-              |                |
-              +-------+--------+
-                      |
-                      v
-                DATABASE LOG
+The central agent workflow is implemented using LangGraph.
+
+It coordinates multiple stages of execution through individual nodes:
+
+- Skill matching
+- Screenshot capture
+- Agent reasoning
+- Action preparation
+- Safety classification
+- Human approval
+- Action execution
+- Result verification
+
+A shared state carries relevant information between nodes.
+
+This modular approach makes the workflow easier to maintain, debug, extend, and control.
+
+**Main file:** `agent/graph.py`
+
+#### 2. Perception Layer
+
+The perception layer provides information about the current desktop environment.
+
+Its responsibilities include:
+
+- Capturing desktop screenshots.
+- Resizing screenshots for visual analysis.
+- Preserving original-resolution screenshots for precise processing.
+- Discovering accessible Windows UI elements.
+- Providing contextual information for action selection.
+
+The project combines visual perception with structured Windows UI Automation.
+
+#### 3. Brain / Reasoning Layer
+
+The reasoning component uses an LLM to interpret instructions and decide which action should happen next.
+
+It considers:
+
+- User instructions
+- Current screenshots
+- Previous actions
+- Execution history
+- Available skills
+- Verification feedback
+
+The model can propose actions such as clicking, typing, waiting, or finishing a task.
+
+Model-generated actions are subject to application-level validation and safety checks before execution.
+
+#### 4. Skills System
+
+The skills layer provides reusable capabilities for common desktop tasks.
+
+Examples include:
+
+- Opening applications
+- Web searching
+- Opening File Explorer
+- Taking screenshots
+- WhatsApp-related operations
+
+Known instructions can be matched to predefined skills rather than requiring the agent to discover every action from scratch.
+
+**Main file:** `skills/skills.py`
+
+#### 5. Safety and Risk Classification
+
+AETHRIX incorporates a risk-classification system to prevent unrestricted desktop automation.
+
+Actions are classified into three categories:
+
+| Risk Level | Behavior |
+|---|---|
+| SAFE | Allowed under the configured safety policy |
+| RISKY | Requires human approval |
+| BLOCKED | Must not be executed |
+
+Potentially consequential operations, such as sending messages or deleting content, require additional caution.
+
+Safety decisions are also logged for auditing.
+
+#### 6. Human-in-the-Loop (HITL)
+
+AETHRIX uses LangGraph interruption and resumption capabilities to support human approval.
+
+The workflow is designed to:
+
+1. Pause when an action requires approval.
+2. Present the pending action for user review.
+3. Resume execution if approved.
+4. Stop the pending action if denied.
+
+This provides an additional layer of control over potentially risky computer operations.
+
+#### 7. Windows UI Automation
+
+The project uses Pywinauto with the Windows UI Automation backend.
+
+It can discover structured interface information, including:
+
+- Element names
+- Control types
+- Automation IDs
+- Bounding rectangles
+- Enabled states
+- Window metadata
+
+For example, Windows Calculator exposes a button with the automation ID:
+
+```python
+num5Button
 ```
 
-This ensures that unattended execution does not bypass human approval requirements.
+A UIA interaction can locate the corresponding element and invoke it.
 
----
+The implementation also includes active-window validation to reduce the risk of interacting with the wrong application.
+
+**Main file:** `perception/uia.py`
+
+#### 8. Action Verification
+
+AETHRIX does not assume that issuing an automation command means the task has succeeded.
+
+The verification stage examines changes in the desktop state and provides feedback to the agent.
+
+This helps the workflow determine whether it should continue, retry within configured limits, or stop.
+
+Application-specific semantic verification remains an area for improvement.
+
+#### 9. Backend Runtime
+
+The backend provides the execution interface between the frontend and the LangGraph agent.
+
+Its responsibilities include:
+
+- Managing agent execution.
+- Tracking active runs.
+- Handling approval responses.
+- Coordinating execution state.
+- Managing runtime errors and cleanup.
+
+**Main file:** `api/runtime.py`
+
+#### 10. Memory and Persistence
+
+The project uses SQLite-based persistence for information such as:
+
+- Sessions
+- Execution steps
+- Confirmation records
+- Decision history
+
+This creates a foundation for execution auditing and future conversation-continuity capabilities.
 
 ## Technology Stack
 
 | Technology | Purpose |
 |---|---|
 | Python | Core programming language |
-| LangGraph | Agent orchestration |
-| LangChain | LLM integration |
+| LangGraph | Agent workflow orchestration |
+| LangChain | LLM and tool integration |
 | Groq | LLM inference |
+| FastAPI | Backend API |
+| Pywinauto | Windows UI Automation |
 | PyAutoGUI | Desktop interaction |
-| pywinauto | Windows UI Automation |
-| MSS | Screen capture |
+| MSS | Screenshot capture |
 | Pillow | Image processing |
-| SQLite | Persistent memory |
-| Schedule | Task scheduling |
-| OpenAI Whisper | Speech recognition |
-| SoundDevice | Audio input |
+| SQLite | Persistent storage |
+| Whisper | Speech recognition |
 | Edge TTS | Text-to-speech |
-| Pygame CE | Audio playback |
-| Python-dotenv | Environment configuration |
+| Pygame | Audio playback |
 
-For the complete dependency list, see `requirements.txt`.
+## Safety and Reliability Principles
 
----
+AETHRIX is being developed around several important engineering principles:
 
-## Project Structure
+- **Controlled execution:** Actions are prepared and validated before execution.
+- **Human oversight:** Risky operations require approval.
+- **Window validation:** UI Automation should interact with the intended application.
+- **Bounded execution:** Configured execution limits help prevent uncontrolled loops.
+- **Error handling:** Failures should stop or recover safely.
+- **Action verification:** The system should inspect results before reporting success.
+- **Auditability:** Important execution and safety decisions are recorded.
 
-The repository is organized into modular components.
 
-```text
-Personal Desktop AI Agent/
-|
-|-- agent/
-|   |-- graph.py
-|
-|-- brain/
-|   |-- ...
-|
-|-- perception/
-|   |-- ...
-|
-|-- actuator/
-|   |-- ...
-|
-|-- skills/
-|   |-- ...
-|
-|-- safety/
-|   |-- safety.py
-|
-|-- memory/
-|   |-- memory.py
-|
-|-- conversation/
-|   |-- ...
-|
-|-- voice/
-|   |-- ...
-|
-|-- scheduler_runner.py
-|-- main.py
-|-- requirements.txt
-|-- README.md
-```
 
-Some modules contain additional files and supporting components. Refer to the repository for the latest structure.
-
----
-
-## Installation
+## Installation and Setup
 
 ### Prerequisites
 
-- Windows 10 or Windows 11.
-- Python.
-- Git.
-- LLM provider credentials.
-- Microphone and audio devices for voice functionality.
+- Windows 10 or Windows 11
+- Python environment compatible with the installed dependencies
+- Git
+- Groq API key for the configured LLM integration
 
 ### 1. Clone the Repository
 
-```bash
-git clone https://github.com/burhan-arshad/personal-desktop-agent.git
-
-cd personal-desktop-agent
+```powershell
+git clone https://github.com/burhan-arshad/personal-desktop-agent
+cd "personal-desktop-agent"
 ```
 
 ### 2. Create a Virtual Environment
 
-```bash
+```powershell
 python -m venv venv
 ```
 
-### 3. Activate the Virtual Environment
-
-PowerShell:
+### 3. Activate the Environment
 
 ```powershell
 .\venv\Scripts\Activate.ps1
@@ -368,201 +290,100 @@ PowerShell:
 
 ### 4. Install Dependencies
 
-```bash
-python -m pip install --upgrade pip
-
-pip install -r requirements.txt
+```powershell
+python -m pip install -r requirements.txt
 ```
 
 ### 5. Configure Environment Variables
 
-Create a `.env` file in the project root.
-
-Example configuration:
+Create a `.env` file in the project root:
 
 ```env
 GROQ_API_KEY=your_groq_api_key
 ```
 
-Add any other environment variables required by the configured LLM provider.
+Never commit API keys or sensitive credentials to version control.
 
-Never commit API keys, passwords, or private credentials to GitHub.
+### 6. Run the Agent
 
----
+The graph module has been used directly during development:
 
-## Configuration
-
-Before running the agent:
-
-1. Configure the LLM provider.
-2. Add the required environment variables.
-3. Verify the model configuration.
-4. Check the registered skills.
-5. Review skill risk classifications.
-6. Ensure the required Windows automation dependencies are installed.
-
-The application uses local SQLite storage for persistent memory and scheduling data.
-
----
-
-## Running the Agent
-
-Activate the virtual environment first.
-
-Run the current interactive agent entry point:
-
-```bash
+```powershell
 python agent/graph.py
 ```
 
-Example instruction:
+The final integrated frontend/backend startup instructions will be added after the runtime configuration is finalized.
 
-```text
-Open Microsoft Edge
-```
+## Development Status
 
-The agent will attempt to:
+AETHRIX is an actively developed project.
 
-1. Resolve the instruction.
-2. Identify an appropriate execution path.
-3. Inspect the desktop.
-4. Generate an action.
-5. Perform safety classification.
-6. Execute the permitted action.
-7. Verify the result.
+### Implemented Foundations
 
----
+- LangGraph-based agent orchestration.
+- Natural-language skill matching.
+- Predefined desktop skills.
+- Screenshot capture and perception workflow.
+- SAFE, RISKY, and BLOCKED risk classification.
+- Human-in-the-loop approval workflow.
+- SQLite-based execution and session logging.
+- Windows UI Automation element discovery.
+- UIA interaction helpers.
+- Backend runtime and approval-response integration.
+- Voice input/output components.
 
-## Task Scheduling
+### Areas Requiring Further Validation
 
-The scheduler runs as a separate process.
+- Reliable multi-step desktop execution.
+- Application-specific semantic verification.
+- Frontend/backend regression testing.
+- Persistent conversation restoration.
+- Robust recovery from failed or interrupted tasks.
+- Consistent automation across different Windows applications.
 
-### Add a Scheduled Task
+### Known Limitation
 
-```bash
-python scheduler_runner.py add
-```
+The Calculator compound workflow currently opens Calculator, but the subsequent click on the number 5 button is not reliably completing through the integrated agent workflow.
 
-Follow the prompts to provide the instruction and schedule.
+Standalone UIA element discovery and button invocation have been verified separately. The integrated workflow issue remains under investigation.
 
-### List Scheduled Tasks
+## Future Roadmap
 
-```bash
-python scheduler_runner.py list
-```
+- Improve multi-step desktop task reliability.
+- Expand Windows UI Automation support.
+- Improve semantic action verification.
+- Strengthen persistent memory and conversation continuity.
+- Improve runtime error recovery.
+- Expand automated testing and regression coverage.
+- Improve frontend execution visibility.
+- Add more desktop skills while maintaining safety controls.
+- Publish a complete architecture and demonstration guide.
 
-### Run the Scheduler
+## Engineering Concepts Explored
 
-```bash
-python scheduler_runner.py run
-```
+This project combines several areas of AI and software engineering:
 
-Keep the scheduler process running.
+- Agentic AI
+- Large Language Models
+- LLM inference and tool calling
+- Graph-based workflow orchestration
+- Stateful execution
+- Computer-use agents
+- Visual perception
+- Windows UI Automation
+- Human-in-the-loop systems
+- REST APIs and backend development
+- Concurrency and synchronization
+- Database persistence
+- Software testing and reliability engineering
 
-### Disable a Scheduled Task
+## Project Philosophy
 
-```bash
-python scheduler_runner.py disable
-```
+An AI desktop assistant should not blindly execute every instruction suggested by a language model.
 
-Follow the prompts to select the task.
+It should understand the task, inspect its environment, prepare an appropriate action, evaluate its risk, involve the user when necessary, and verify the outcome.
 
-### Scheduling Safety
-
-Scheduled tasks are checked at two stages:
-
-**Scheduling Time**
-
-The scheduling guard identifies potentially risky instructions and warns the user.
-
-**Execution Time**
-
-The agent independently evaluates proposed actions.
-
-RISKY and BLOCKED actions are aborted without waiting for human approval.
-
-The scheduling-time warning does not override runtime safety checks.
-
----
-
-## Safety and Reliability
-
-The project follows these safety principles:
-
-1. The LLM cannot independently authorize its own actions.
-2. Proposed actions are checked by an independent safety classifier.
-3. Unknown actions are rejected.
-4. Destructive system-operation patterns are blocked.
-5. Risky interactive actions require human approval.
-6. Scheduled execution never bypasses safety checks.
-7. Scheduled aborts are recorded in the database.
-8. Execution history is maintained for debugging and auditing.
-9. Action verification helps identify unsuccessful operations.
-
-Users should review new skills and their risk classifications before enabling them.
-
----
-
-## Memory and Personalization
-
-The local SQLite database maintains the agent's operational history and configuration.
-
-Current data categories include:
-
-- `sessions`
-- `steps`
-- `confirmations`
-- `preferences`
-- `scheduled_tasks`
-- `scheduled_events`
-
-The database is local application data. Back it up before manually modifying or deleting it.
-
-Avoid committing personal execution history or sensitive information.
-
----
-
-## Current Limitations
-
-- Not every natural-language instruction is supported.
-- Desktop automation depends on the current application and screen state.
-- Custom-rendered interfaces may not expose accessible UI Automation elements.
-- Grid-based visual perception may struggle with small or closely spaced controls.
-- Multiple browser profiles may require additional application-specific handling.
-- Scheduled jobs require the scheduler process to remain active.
-- Voice features depend on local audio-device configuration.
-- A SAFE classification does not guarantee that an action is semantically correct.
-- The project is under active development.
-
----
-
-## Development Roadmap
-
-The project has been developed incrementally.
-
-| Phase | Description | Status |
-|---|---|---|
-| Phase 1 | Desktop Agent Foundation | Completed |
-| Phase 2 | Visual Perception | Completed |
-| Phase 3 | Safety and Human-in-the-Loop | Completed |
-| Phase 4 | Persistent Memory and Logging | Completed |
-| Phase 5 | Desktop Skills and UI Automation | Completed |
-| Phase 6 | Voice Integration | Completed |
-| Phase 7 | Conversation and Context | Completed |
-| Phase 8 | Personalization and Scheduling | Completed |
-
-### Future Improvements
-
-Potential areas for further development:
-
-- Advanced visual grounding.
-- More precise GUI element detection.
-- Improved multi-step planning.
-- Better application and browser-profile management.
-- Enhanced task recovery and error handling.
-- Expanded automated testing.
-- Windows Task Scheduler integration.
-- Improved execution reporting.
+AETHRIX explores how these components can work together to create a safer and more capable personal desktop assistant.
 
 ---
 
@@ -570,19 +391,7 @@ Potential areas for further development:
 
 **Burhan Arshad**
 
-Computer Science Student | AI / Machine Learning Engineer
+Aspiring AI/ML Engineer | Computer Science Student
 
-- GitHub: [burhan-arshad](https://github.com/burhan-arshad)
+- GitHub: [@burhan-arshad](https://github.com/burhan-arshad)
 - Portfolio: [burhan.cypherai.tech](https://burhan.cypherai.tech)
-
----
-
-## Support
-
-If you find this project interesting, consider giving the repository a star on GitHub.
-
-Feedback, suggestions, and contributions are welcome.
-
----
-
-Built with Python, Agentic AI, and a passion for intelligent automation.
